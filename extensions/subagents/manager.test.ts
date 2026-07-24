@@ -9,7 +9,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Effect, Layer, ManagedRuntime } from "effect";
-import { BackendRegistry, type SubagentBackend } from "./src/backend.ts";
+import {
+  BackendRegistry,
+  type BackendSpawnTask,
+  type SubagentBackend,
+} from "./src/backend.ts";
 import { piBackend } from "./src/backends/pi.ts";
 import { makeStubBackend } from "./src/backends/stub.ts";
 import type { BackendName, ParentContext, SpawnTask } from "./src/domain.ts";
@@ -21,6 +25,25 @@ import {
 import { runTool } from "./src/runtime.ts";
 
 const TestRegistryLive = Layer.sync(BackendRegistry, () => {
+  const codexStub = makeStubBackend({
+    backend: "codex",
+    defaultModelLabel: "codex/gpt-5-codex",
+    contextWindow: 272_000,
+    toolName: "shell",
+    cadenceMs: 30,
+  });
+  const messagingCodexStub: SubagentBackend = {
+    ...codexStub,
+    spawn: (task: BackendSpawnTask) => {
+      if (task.prompt.startsWith("MESSAGE:")) {
+        task.messaging.sendToParent(
+          task.prompt.slice("MESSAGE:".length),
+          "pm-7",
+        );
+      }
+      return codexStub.spawn(task);
+    },
+  };
   const backends: SubagentBackend[] = [
     piBackend,
     makeStubBackend({
@@ -30,13 +53,7 @@ const TestRegistryLive = Layer.sync(BackendRegistry, () => {
       toolName: "Bash",
       cadenceMs: 40,
     }),
-    makeStubBackend({
-      backend: "codex",
-      defaultModelLabel: "codex/gpt-5-codex",
-      contextWindow: 272_000,
-      toolName: "shell",
-      cadenceMs: 30,
-    }),
+    messagingCodexStub,
   ];
   return new Map<BackendName, SubagentBackend>(
     backends.map((backend) => [backend.name, backend]),
@@ -225,6 +242,60 @@ test("pi spawn fails fast without the parent model registry", async () => {
     // The failed spawn must release its concurrency reservation.
     const snap = await runTool(runtime, manager.spawn("codex", task("ok")));
     assert.equal(snap.backend, "codex");
+  });
+});
+
+test("child messages are delivered live and retained until inbox drain", async () => {
+  await withManager(async (manager, runtime) => {
+    const delivered: Array<{
+      id: string;
+      subagentId: string;
+      message: string;
+    }> = [];
+    manager.view.setOnMessage((message) => {
+      delivered.push({
+        id: message.id,
+        subagentId: message.subagentId,
+        message: message.message,
+      });
+    });
+
+    const snap = await runTool(
+      runtime,
+      manager.spawn("codex", task("MESSAGE:Need the expected format")),
+    );
+    assert.deepEqual(delivered, [
+      {
+        id: "cm-1",
+        subagentId: snap.id,
+        message: "Need the expected format",
+      },
+    ]);
+
+    const inbox = await runTool(runtime, manager.inbox);
+    assert.equal(inbox.length, 1);
+    assert.equal(inbox[0]?.replyTo, "pm-7");
+    assert.deepEqual(await runTool(runtime, manager.inbox), []);
+  });
+});
+
+test("orchestrator messages only steer running children", async () => {
+  await withManager(async (manager, runtime) => {
+    const snap = await runTool(
+      runtime,
+      manager.spawn("claude", task("Long running task")),
+    );
+    const messageId = await runTool(
+      runtime,
+      manager.message(snap.id, "Check the parser too", "cm-2"),
+    );
+    assert.equal(messageId, "pm-1");
+
+    await runTool(runtime, manager.cancel([snap.id]));
+    await assert.rejects(
+      runTool(runtime, manager.message(snap.id, "One more thing")),
+      /only be sent while it is running/,
+    );
   });
 });
 

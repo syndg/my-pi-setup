@@ -6,6 +6,8 @@
  * - subagent_spawn: fire-and-forget spawn (prompt, title, agent, working_dir,
  *   model, reasoning_effort). Max 4 running at once across all backends.
  * - subagent_wait: block until the listed subagents settle, return results.
+ * - subagent_send: steer one running child with new orchestrator context.
+ * - subagent_inbox: read and clear child-to-parent messages.
  * - subagent_cancel: stop one or more running subagents.
  * - subagent_check: peek at a subagent's status and recent activity.
  * - subagent_list: list all subagents.
@@ -53,6 +55,7 @@ import {
   formatContextUtilization,
 } from "./src/format.ts";
 import { SubagentManager, type SubagentManagerShape } from "./src/manager.ts";
+import type { ChildToParentMessage } from "./src/messaging.ts";
 import {
   buildSubagentResultMessage,
   buildSubagentSpawnResult,
@@ -60,7 +63,10 @@ import {
   SUBAGENT_CANCEL_TOOL_DESCRIPTION,
   SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS,
   SUBAGENT_CHECK_TOOL_DESCRIPTION,
+  SUBAGENT_INBOX_TOOL_DESCRIPTION,
   SUBAGENT_LIST_TOOL_DESCRIPTION,
+  SUBAGENT_SEND_PARAMETER_DESCRIPTIONS,
+  SUBAGENT_SEND_TOOL_DESCRIPTION,
   SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS,
   SUBAGENT_SPAWN_PROMPT_GUIDELINES,
   SUBAGENT_SPAWN_PROMPT_SNIPPET,
@@ -153,6 +159,7 @@ export default function (pi: ExtensionAPI) {
       .runPromise(SubagentManager)
       .then((manager) => {
         manager.view.setOnSettled(onSettled);
+        manager.view.setOnMessage(onChildMessage);
         unsubStatus?.();
         unsubStatus = manager.view.subscribe(() => updateStatus(manager));
         updateStatus(manager);
@@ -175,6 +182,25 @@ export default function (pi: ExtensionAPI) {
       "subagents",
       formatActivityStatus(ui.theme, { running, done, failed }),
     );
+  };
+
+  const onChildMessage = (message: ChildToParentMessage) => {
+    const reply = message.replyTo ? ` in reply to ${message.replyTo}` : "";
+    try {
+      pi.sendMessage(
+        {
+          customType: "subagent-message",
+          content:
+            `Subagent ${message.subagentId} "${message.title}" sent message ${message.id}${reply}:\n\n` +
+            message.message,
+          display: true,
+          details: message,
+        },
+        { deliverAs: "steer", triggerTurn: true },
+      );
+    } catch {
+      // The bounded manager inbox retains the message for subagent_inbox.
+    }
   };
 
   const deliverResult = (snap: SubagentSnapshot) => {
@@ -450,6 +476,71 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
+    name: "subagent_send",
+    label: "Message Subagent",
+    description: SUBAGENT_SEND_TOOL_DESCRIPTION,
+    parameters: Type.Object({
+      id: Type.String({
+        description: SUBAGENT_SEND_PARAMETER_DESCRIPTIONS.id,
+      }),
+      message: Type.String({
+        minLength: 1,
+        maxLength: 16 * 1024,
+        description: SUBAGENT_SEND_PARAMETER_DESCRIPTIONS.message,
+      }),
+      reply_to: Type.Optional(
+        Type.String({
+          maxLength: 128,
+          description: SUBAGENT_SEND_PARAMETER_DESCRIPTIONS.replyTo,
+        }),
+      ),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const manager = await getManager();
+      const messageId = await runTool(
+        getRuntime(),
+        manager.message(params.id, params.message, params.reply_to),
+        { signal, interruptMessage: "Subagent message delivery aborted." },
+      );
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Sent orchestrator message ${messageId} to ${params.id}.`,
+          },
+        ],
+        details: { id: messageId, subagentId: params.id },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "subagent_inbox",
+    label: "Read Subagent Inbox",
+    description: SUBAGENT_INBOX_TOOL_DESCRIPTION,
+    parameters: Type.Object({}),
+    async execute() {
+      const manager = await getManager();
+      const messages = await runTool(getRuntime(), manager.inbox);
+      const text =
+        messages.length === 0
+          ? "No pending subagent messages."
+          : messages
+              .map((message) => {
+                const reply = message.replyTo
+                  ? ` in reply to ${message.replyTo}`
+                  : "";
+                return `## ${message.id} from ${message.subagentId} "${message.title}"${reply}\n\n${message.message}`;
+              })
+              .join("\n\n---\n\n");
+      return {
+        content: [{ type: "text", text }],
+        details: { messages },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: "subagent_cancel",
     label: "Cancel Subagents",
     description: SUBAGENT_CANCEL_TOOL_DESCRIPTION,
@@ -570,6 +661,28 @@ export default function (pi: ExtensionAPI) {
   });
 
   // --- Result message rendering ------------------------------------------
+
+  pi.registerMessageRenderer("subagent-message", (message, _options, theme) => {
+    const details = message.details as ChildToParentMessage | undefined;
+    if (!details) {
+      return new Text(
+        typeof message.content === "string" ? message.content : "",
+        0,
+        0,
+      );
+    }
+    const reply = details.replyTo
+      ? theme.fg("dim", ` · reply to ${details.replyTo}`)
+      : "";
+    return new Text(
+      theme.fg("accent", theme.bold(`message ${details.id}`)) +
+        theme.fg("muted", ` · ${details.subagentId} · ${details.title}`) +
+        reply +
+        `\n${theme.fg("toolOutput", details.message)}`,
+      0,
+      0,
+    );
+  });
 
   pi.registerMessageRenderer(
     "subagent-result",

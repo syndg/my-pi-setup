@@ -20,23 +20,66 @@ import type {
 import {
   createAgentSession,
   DefaultResourceLoader,
+  defineTool,
   getAgentDir,
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { Cause, Scope } from "effect";
 import { Effect, Queue, Stream } from "effect";
-import type { SubagentBackend, SubagentSession } from "../backend.ts";
+import { Type } from "typebox";
 import type {
-  SpawnTask,
-  SubagentEvent,
-  SubagentMeta,
-  TranscriptPart,
-} from "../domain.ts";
+  BackendSpawnTask,
+  SubagentBackend,
+  SubagentSession,
+} from "../backend.ts";
+import type { SubagentEvent, SubagentMeta, TranscriptPart } from "../domain.ts";
 import { SendError, SpawnError } from "../domain.ts";
 import { createToolCallTimeoutGuard } from "../../../shared/tool-call-timeout.ts";
 
 const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000;
+
+function createMessageOrchestratorTool(task: BackendSpawnTask) {
+  return defineTool({
+    name: "message_orchestrator",
+    label: "Message Orchestrator",
+    description:
+      "Send a concise message to the parent orchestrator while continuing your assigned task. Use this for important findings, blockers, or questions that can be answered by the orchestrator; it does not contact the user directly.",
+    promptSnippet:
+      "Message the parent orchestrator with an important finding, blocker, or question",
+    promptGuidelines: [
+      "Use message_orchestrator only when the parent needs information before your final result or when you need missing task context; continue useful work after sending.",
+    ],
+    parameters: Type.Object({
+      message: Type.String({
+        minLength: 1,
+        maxLength: 16 * 1024,
+        description: "Message for the parent orchestrator",
+      }),
+      reply_to: Type.Optional(
+        Type.String({
+          maxLength: 128,
+          description: "Orchestrator message id being answered, such as pm-1",
+        }),
+      ),
+    }),
+    async execute(_toolCallId, params) {
+      const received = task.messaging.sendToParent(
+        params.message,
+        params.reply_to,
+      );
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Message ${received.id} delivered to the orchestrator. Continue your task; a reply may arrive as a new orchestrator message.`,
+          },
+        ],
+        details: { id: received.id, replyTo: received.replyTo },
+      };
+    },
+  });
+}
 
 /** Tools that headless children must not receive. Everything else stays enabled. */
 const CHILD_EXCLUDED_TOOL_NAMES = [
@@ -45,6 +88,8 @@ const CHILD_EXCLUDED_TOOL_NAMES = [
   "subagent_cancel",
   "subagent_check",
   "subagent_list",
+  "subagent_send",
+  "subagent_inbox",
   "workflow",
   "ask_user",
 ] as const;
@@ -260,7 +305,7 @@ function boundedError(error: unknown) {
 }
 
 const makePiSession = (
-  task: SpawnTask,
+  task: BackendSpawnTask,
 ): Effect.Effect<SubagentSession, SpawnError, Scope.Scope> =>
   Effect.gen(function* () {
     const registry = task.parent.modelRegistry;
@@ -292,6 +337,7 @@ const makePiSession = (
           resourceLoader: loader,
           model,
           thinkingLevel,
+          customTools: [createMessageOrchestratorTool(task)],
           excludeTools: [...CHILD_EXCLUDED_TOOL_NAMES],
         });
         // Start child extension session hooks/resources in headless mode.

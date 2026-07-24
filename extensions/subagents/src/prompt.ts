@@ -54,6 +54,18 @@ export const SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS = {
   ids: 'Subagent ids to wait for, e.g. ["sa-1", "sa-2"]',
 };
 
+export const SUBAGENT_SEND_TOOL_DESCRIPTION =
+  "Send a message from the parent orchestrator to one running subagent. Pi children receive it as steering input at the next safe turn boundary. This never contacts sibling agents and never restarts a settled child.";
+
+export const SUBAGENT_SEND_PARAMETER_DESCRIPTIONS = {
+  id: 'Running subagent id, e.g. "sa-1"',
+  message: "Concise new context, direction, or answer for the child",
+  replyTo: "Optional child message id being answered, such as cm-1",
+};
+
+export const SUBAGENT_INBOX_TOOL_DESCRIPTION =
+  "Read and clear the bounded session-local inbox of messages that Pi subagents sent to the parent orchestrator. Messages are also delivered live when possible; use the inbox to recover or review pending child messages.";
+
 /** Describes aborting running subagents while retaining their partial transcripts. */
 export const SUBAGENT_CANCEL_TOOL_DESCRIPTION =
   "Cancel one or more running subagents. This aborts their active work but preserves their partial session transcripts on disk.";

@@ -18,6 +18,11 @@ import type {
   SubagentEvent,
   SubagentMeta,
 } from "./domain.ts";
+import type { ChildMessenger } from "./messaging.ts";
+
+export interface BackendSpawnTask extends SpawnTask {
+  readonly messaging: ChildMessenger;
+}
 
 export interface BackendCapabilities {
   /** Can send() steer a live run (vs. only starting a fresh run when idle). */
@@ -62,7 +67,7 @@ export interface SubagentBackend {
    * semantics (background fibers, result delivery) live in the manager.
    */
   spawn(
-    task: SpawnTask,
+    task: BackendSpawnTask,
   ): Effect.Effect<SubagentSession, SpawnError, Scope.Scope>;
 }
 

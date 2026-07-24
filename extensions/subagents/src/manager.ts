@@ -41,6 +41,7 @@ import {
   SendError,
   SpawnError,
 } from "./domain.ts";
+import { ParentChildMailbox, type ChildToParentMessage } from "./messaging.ts";
 
 export const MAX_RUNNING = 4;
 export const MAX_TRACKED = 64;
@@ -127,6 +128,10 @@ export interface SubagentReadModel {
   setOnSettled(
     hook: ((snap: SubagentSnapshot, consumed: boolean) => void) | undefined,
   ): void;
+  /** Register delivery of child-to-parent messages into the parent session. */
+  setOnMessage(
+    hook: ((message: ChildToParentMessage) => void) | undefined,
+  ): void;
 }
 
 // --- Service --------------------------------------------------------------------
@@ -161,6 +166,12 @@ export interface SubagentManagerShape {
     ids: ReadonlyArray<string>,
   ): Effect.Effect<ReadonlyArray<CancelResult>>;
   send(id: string, text: string): Effect.Effect<void, SendError>;
+  message(
+    id: string,
+    text: string,
+    replyTo?: string,
+  ): Effect.Effect<string, SendError>;
+  readonly inbox: Effect.Effect<ReadonlyArray<ChildToParentMessage>>;
   get(id: string): Effect.Effect<SubagentSnapshot | undefined>;
   readonly list: Effect.Effect<ReadonlyArray<SubagentSnapshot>>;
   readonly disposeAll: Effect.Effect<void>;
@@ -181,6 +192,7 @@ const makeManager = Effect.gen(function* () {
   const runDetached = Effect.runForkWith(yield* Effect.context());
 
   const entries = new Map<string, Entry>();
+  const mailbox = new ParentChildMailbox();
   const waitInterest = new Map<string, number>();
   const listeners = new Set<() => void>();
   /** One-shot nextChange waiters, swapped out before invocation so waiters
@@ -194,6 +206,7 @@ const makeManager = Effect.gen(function* () {
   let disposed = false;
   let onSettled:
     ((snap: SubagentSnapshot, consumed: boolean) => void) | undefined;
+  let onMessage: ((message: ChildToParentMessage) => void) | undefined;
 
   const notify = (id?: string) => {
     const waiters = changeWaiters;
@@ -441,6 +454,9 @@ const makeManager = Effect.gen(function* () {
       );
 
       const doSpawn = Effect.gen(function* () {
+        const origin = task.origin ?? "model";
+        const id =
+          origin === "btw" ? `btw-${++btwCounter}` : `sa-${++modelCounter}`;
         const backend: SubagentBackend | undefined = registry.get(backendName);
         if (!backend) {
           return yield* new BackendUnavailableError({
@@ -455,9 +471,33 @@ const makeManager = Effect.gen(function* () {
         }
 
         const scope = yield* Scope.make();
-        const session = yield* Scope.provide(backend.spawn(task), scope).pipe(
-          Effect.onError(() => Scope.close(scope, Exit.void)),
-        );
+        const session = yield* Scope.provide(
+          backend.spawn({
+            ...task,
+            messaging: {
+              childId: id,
+              sendToParent: (text, replyTo) => {
+                if (disposed) {
+                  throw new Error("Parent subagent manager is shutting down.");
+                }
+                const received = mailbox.receiveChildMessage(
+                  id,
+                  task.title,
+                  text,
+                  replyTo,
+                );
+                try {
+                  onMessage?.(received);
+                } catch {
+                  // The message remains available through inbox even when
+                  // live parent delivery is unavailable.
+                }
+                return received;
+              },
+            },
+          }),
+          scope,
+        ).pipe(Effect.onError(() => Scope.close(scope, Exit.void)));
         if (disposed) {
           yield* Scope.close(scope, Exit.void);
           return yield* new SpawnError({
@@ -465,9 +505,6 @@ const makeManager = Effect.gen(function* () {
           });
         }
 
-        const origin = task.origin ?? "model";
-        const id =
-          origin === "btw" ? `btw-${++btwCounter}` : `sa-${++modelCounter}`;
         const meta = yield* session.meta;
         const entry: Entry = {
           snapshot: {
@@ -654,8 +691,38 @@ const makeManager = Effect.gen(function* () {
       return entry.session.send(text);
     });
 
+  const message = (id: string, text: string, replyTo?: string) =>
+    Effect.suspend((): Effect.Effect<string, SendError> => {
+      const entry = entries.get(id);
+      if (!entry || disposed) {
+        return new SendError({
+          message: `Subagent "${id}" is no longer tracked.`,
+        });
+      }
+      if (entry.snapshot.status !== "running") {
+        return new SendError({
+          message: `Subagent "${id}" is ${entry.snapshot.status}; messages can only be sent while it is running.`,
+        });
+      }
+
+      let outbound: ReturnType<ParentChildMailbox["createParentMessage"]>;
+      try {
+        outbound = mailbox.createParentMessage(id, text, replyTo);
+      } catch (error) {
+        return new SendError({
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return entry.session
+        .send(outbound.prompt)
+        .pipe(Effect.map(() => outbound.id));
+    });
+
+  const inbox = Effect.sync(() => mailbox.drain());
+
   const disposeAll = Effect.gen(function* () {
     disposed = true;
+    mailbox.clear();
     const all = [...entries.values()];
     entries.clear();
     yield* Effect.forEach(
@@ -711,6 +778,9 @@ const makeManager = Effect.gen(function* () {
     setOnSettled: (hook) => {
       onSettled = hook;
     },
+    setOnMessage: (hook) => {
+      onMessage = hook;
+    },
   };
 
   // Safety net: disposing the ManagedRuntime tears everything down even if
@@ -722,6 +792,8 @@ const makeManager = Effect.gen(function* () {
     waitFor,
     cancel,
     send,
+    message,
+    inbox,
     get: (id) => Effect.sync(() => entries.get(id)?.snapshot),
     list: Effect.sync(() => [...entries.values()].map((e) => e.snapshot)),
     disposeAll,
