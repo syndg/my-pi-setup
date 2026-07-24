@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseRecapResponse, reasoningOptions } from "./src/summarizer.ts";
+import { SUMMARY_SYSTEM_PROMPT } from "./src/prompt.ts";
 
 test("omits reasoning when configured off", () => {
   assert.deepEqual(reasoningOptions("off"), {});
@@ -53,4 +54,11 @@ test("strips terminal control sequences from recap fields", () => {
     ),
     { recap: "Updated config.", next: "Review it." },
   );
+});
+
+test("requests compact plain-text fields for the inline renderer", () => {
+  assert.match(SUMMARY_SYSTEM_PROMPT, /one or two short plain-text sentences/);
+  assert.match(SUMMARY_SYSTEM_PROMPT, /reads naturally after "Next,"/);
+  assert.match(SUMMARY_SYSTEM_PROMPT, /Do not use Markdown in either field/);
+  assert.doesNotMatch(SUMMARY_SYSTEM_PROMPT, /Markdown bullets/);
 });

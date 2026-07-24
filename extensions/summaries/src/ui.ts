@@ -1,5 +1,4 @@
 import {
-  getMarkdownTheme,
   ThinkingSelectorComponent,
   type ExtensionCommandContext,
   type Theme,
@@ -10,7 +9,7 @@ import {
   type Model,
   type ModelThinkingLevel,
 } from "@earendil-works/pi-ai";
-import { Box, Markdown, Text } from "@earendil-works/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 import type { ReasoningLevel, SummaryConfig } from "./config.ts";
 import type { RunRecap } from "./summarizer.ts";
 
@@ -21,40 +20,58 @@ export interface RecapEntryData extends RunRecap {
   readonly fallback?: boolean;
 }
 
-class RecapCard {
-  private readonly data: RecapEntryData;
+function inlineText(value: string | undefined) {
+  return value?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+function sentence(text: string) {
+  return /[.!?…](?:["'’”)\]}*_~`]+)?$/.test(text) ? text : `${text}.`;
+}
+
+function formatRecap(data: RecapEntryData | undefined) {
+  if (!data) return "※ recap: unavailable.";
+
+  const recap = inlineText(data.recap);
+  const next = inlineText(data.next).replace(/^(?:next\s*[:,]\s*)+/i, "");
+  if (!recap && !next) return "※ recap: unavailable.";
+
+  const body = [
+    recap ? sentence(recap) : undefined,
+    next ? `Next, ${sentence(next)}` : undefined,
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join(" ");
+  return `※ recap: ${body}`;
+}
+
+class RecapText {
+  private readonly data: RecapEntryData | undefined;
   private readonly theme: Theme;
   private readonly expanded: boolean;
 
-  constructor(data: RecapEntryData, theme: Theme, expanded: boolean) {
+  constructor(
+    data: RecapEntryData | undefined,
+    theme: Theme,
+    expanded: boolean,
+  ) {
     this.data = data;
     this.theme = theme;
     this.expanded = expanded;
   }
 
   render(width: number) {
-    const box = new Box(1, 1, (text) => this.theme.bg("customMessageBg", text));
-    const title =
-      this.theme.fg("accent", "✦ ") +
-      this.theme.fg("customMessageLabel", this.theme.bold("Run recap"));
-    box.addChild(new Text(title, 0, 0));
-    box.addChild(
-      new Markdown(this.data.recap, 0, 1, getMarkdownTheme(), {
-        color: (text) => this.theme.fg("customMessageText", text),
-      }),
+    const recap = this.theme.fg(
+      "dim",
+      this.theme.italic(formatRecap(this.data)),
     );
-    box.addChild(
-      new Text(
-        `${this.theme.fg("accent", this.theme.bold("Next:"))} ${this.theme.fg("customMessageText", this.data.next)}`,
-        0,
-        0,
-      ),
-    );
-    if (this.expanded) {
-      const source = `${this.data.provider}/${this.data.model} · ${this.data.reasoning}${this.data.fallback ? " · local fallback" : ""}`;
-      box.addChild(new Text(this.theme.fg("dim", source), 0, 1));
+    if (!this.expanded || !this.data) {
+      return new Text(recap, 0, 0).render(width);
     }
-    return box.render(width);
+
+    const metadata = `${this.data.provider}/${this.data.model} · ${this.data.reasoning}${this.data.fallback ? " · local fallback" : ""}`;
+    return new Text(`${recap}\n${this.theme.fg("dim", metadata)}`, 0, 0).render(
+      width,
+    );
   }
 
   invalidate() {}
@@ -65,9 +82,7 @@ export function renderRecap(
   expanded: boolean,
   theme: Theme,
 ) {
-  if (!data)
-    return new Text(theme.fg("warning", "Run recap unavailable"), 0, 0);
-  return new RecapCard(data, theme, expanded);
+  return new RecapText(data, theme, expanded);
 }
 
 export async function openModelPicker(

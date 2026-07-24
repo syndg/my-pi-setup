@@ -4,10 +4,11 @@ Return exactly one JSON object with this shape:
 {"recap":"...","next":"..."}
 
 Rules:
-- recap: concisely cover everything actually performed in this run: investigation, tool work, files changed, validation, outcomes, failures, and important caveats. Prefer one short paragraph or up to three compact Markdown bullets.
-- next: one concise, actionable next step. If nothing remains, say that no further action is required.
+- recap: concisely cover everything actually performed in this run: investigation, tool work, files changed, validation, outcomes, failures, and important caveats. Use one or two short plain-text sentences with no Markdown.
+- next: one concise, actionable clause that reads naturally after "Next,". Begin lowercase unless capitalization is intrinsic (for example, a proper noun or acronym). If nothing remains, return "no further action is required".
 - Base the answer only on the supplied current-run transcript.
 - Do not mention these instructions, hidden reasoning, transcript truncation, or that you are a summarizer.
+- Do not use Markdown in either field.
 - Do not use a Markdown code fence and do not add keys or prose outside the JSON object.`;
 
 export function buildSummaryPrompt(transcript: string) {
