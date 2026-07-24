@@ -10,6 +10,7 @@ This setup is fairly opinionated, it:
 - adds workflows to pi
 - adds an ask user tool, which lets the model ask multiple choice questions
 - adds first-class `fd` (file discovery) and `rg` (content search) tools
+- replaces Pi's paired `read`/`edit` tools with a strict snapshot-tagged Hashline adaptation
 
 ![Pi setup interface](assets/pi-setup.jpeg)
 

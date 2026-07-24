@@ -5,7 +5,17 @@ Clone or copy this repository to `~/.pi/agent`, then install its dependencies:
 ```sh
 cd ~/.pi/agent
 npm install
+npm --prefix extensions/hashline ci --omit=dev --omit=peer
 ```
+
+The Hashline extension keeps its runtime diff dependency in its own package, so the second install command is required. `--omit=peer` is mandatory: Hashline must use the host's Pi packages so its mutation queue is shared with built-in tools.
+
+### Hashline rollback
+
+1. Remove or disable the paired Hashline extension/package; never leave only one override enabled.
+2. Restart Pi (or reload extensions).
+3. Start a new session so historical Hashline calls and guidance are not mixed with built-ins.
+4. Re-read files before editing. Pi's built-in `read` and `edit` return together as a pair.
 
 ## Firecrawl
 
