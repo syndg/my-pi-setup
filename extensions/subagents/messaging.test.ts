@@ -48,6 +48,19 @@ test("child inbox is bounded and drains in arrival order", () => {
   assert.deepEqual(mailbox.drain(), []);
 });
 
+test("acknowledging live delivery removes only that inbox message", () => {
+  const mailbox = new ParentChildMailbox();
+  const first = mailbox.receiveChildMessage("sa-1", "one", "first");
+  mailbox.receiveChildMessage("sa-2", "two", "second");
+
+  assert.equal(mailbox.acknowledgeChildMessage(first.id), true);
+  assert.equal(mailbox.acknowledgeChildMessage(first.id), false);
+  assert.deepEqual(
+    mailbox.drain().map(({ id, message }) => ({ id, message })),
+    [{ id: "cm-2", message: "second" }],
+  );
+});
+
 test("mailbox rejects empty and oversized messages", () => {
   const mailbox = new ParentChildMailbox();
   assert.throws(() => mailbox.createParentMessage("sa-1", "  "), /empty/);

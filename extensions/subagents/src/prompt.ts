@@ -64,7 +64,7 @@ export const SUBAGENT_SEND_PARAMETER_DESCRIPTIONS = {
 };
 
 export const SUBAGENT_INBOX_TOOL_DESCRIPTION =
-  "Read and clear the bounded session-local inbox of messages that Pi subagents sent to the parent orchestrator. Messages are also delivered live when possible; use the inbox to recover or review pending child messages.";
+  "Read and clear the bounded session-local inbox of child messages whose live delivery was unavailable. Successfully delivered live messages are acknowledged and omitted to prevent duplicate transcript entries.";
 
 /** Describes aborting running subagents while retaining their partial transcripts. */
 export const SUBAGENT_CANCEL_TOOL_DESCRIPTION =

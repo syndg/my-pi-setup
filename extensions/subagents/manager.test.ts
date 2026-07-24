@@ -245,7 +245,7 @@ test("pi spawn fails fast without the parent model registry", async () => {
   });
 });
 
-test("child messages are delivered live and retained until inbox drain", async () => {
+test("live-delivered child messages are not duplicated in the inbox", async () => {
   await withManager(async (manager, runtime) => {
     const delivered: Array<{
       id: string;
@@ -258,6 +258,7 @@ test("child messages are delivered live and retained until inbox drain", async (
         subagentId: message.subagentId,
         message: message.message,
       });
+      return true;
     });
 
     const snap = await runTool(
@@ -272,9 +273,24 @@ test("child messages are delivered live and retained until inbox drain", async (
       },
     ]);
 
+    assert.deepEqual(await runTool(runtime, manager.inbox), []);
+  });
+});
+
+test("child messages remain in the inbox when live delivery fails", async () => {
+  await withManager(async (manager, runtime) => {
+    manager.view.setOnMessage(() => {
+      throw new Error("parent session unavailable");
+    });
+
+    await runTool(
+      runtime,
+      manager.spawn("codex", task("MESSAGE:Recover this message")),
+    );
+
     const inbox = await runTool(runtime, manager.inbox);
     assert.equal(inbox.length, 1);
-    assert.equal(inbox[0]?.replyTo, "pm-7");
+    assert.equal(inbox[0]?.message, "Recover this message");
     assert.deepEqual(await runTool(runtime, manager.inbox), []);
   });
 });

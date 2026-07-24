@@ -198,8 +198,10 @@ export default function (pi: ExtensionAPI) {
         },
         { deliverAs: "steer", triggerTurn: true },
       );
+      return true;
     } catch {
       // The bounded manager inbox retains the message for subagent_inbox.
+      return false;
     }
   };
 

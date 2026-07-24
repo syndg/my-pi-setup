@@ -128,9 +128,13 @@ export interface SubagentReadModel {
   setOnSettled(
     hook: ((snap: SubagentSnapshot, consumed: boolean) => void) | undefined,
   ): void;
-  /** Register delivery of child-to-parent messages into the parent session. */
+  /**
+   * Register live delivery of child-to-parent messages. Return true only when
+   * the parent session accepted the message; acknowledged messages leave the
+   * recovery inbox.
+   */
   setOnMessage(
-    hook: ((message: ChildToParentMessage) => void) | undefined,
+    hook: ((message: ChildToParentMessage) => boolean) | undefined,
   ): void;
 }
 
@@ -206,7 +210,7 @@ const makeManager = Effect.gen(function* () {
   let disposed = false;
   let onSettled:
     ((snap: SubagentSnapshot, consumed: boolean) => void) | undefined;
-  let onMessage: ((message: ChildToParentMessage) => void) | undefined;
+  let onMessage: ((message: ChildToParentMessage) => boolean) | undefined;
 
   const notify = (id?: string) => {
     const waiters = changeWaiters;
@@ -487,10 +491,12 @@ const makeManager = Effect.gen(function* () {
                   replyTo,
                 );
                 try {
-                  onMessage?.(received);
+                  if (onMessage?.(received) === true) {
+                    mailbox.acknowledgeChildMessage(received.id);
+                  }
                 } catch {
-                  // The message remains available through inbox even when
-                  // live parent delivery is unavailable.
+                  // The message remains available through inbox when live
+                  // parent delivery is unavailable or rejects it.
                 }
                 return received;
               },

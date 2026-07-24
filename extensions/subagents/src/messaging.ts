@@ -99,6 +99,13 @@ export class ParentChildMailbox {
     return received;
   }
 
+  acknowledgeChildMessage(id: string) {
+    const index = this.#inbox.findIndex((message) => message.id === id);
+    if (index === -1) return false;
+    this.#inbox.splice(index, 1);
+    return true;
+  }
+
   drain() {
     return this.#inbox.splice(0);
   }
