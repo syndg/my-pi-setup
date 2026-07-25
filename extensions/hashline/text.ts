@@ -53,6 +53,18 @@ export function encodeText(normalized: string, fidelity: TextFidelity) {
   return fidelity.bom + restored;
 }
 
+/** Counts logical rows without allocating a full-file line array. */
+export function countLogicalLines(text: string) {
+  if (text === "") return 0;
+  let lineCount = text.endsWith("\n") ? 0 : 1;
+  let newline = text.indexOf("\n");
+  while (newline !== -1) {
+    lineCount++;
+    newline = text.indexOf("\n", newline + 1);
+  }
+  return lineCount;
+}
+
 export function splitLogicalText(text: string): LogicalText {
   if (text === "") return { lines: [], finalNewline: false };
   const finalNewline = text.endsWith("\n");

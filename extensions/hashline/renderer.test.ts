@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { createEditDetails } from "./diff.ts";
 import { createHashlineRenderer, HashlineEditComponent } from "./renderer.ts";
 import { SnapshotStore } from "./snapshot-store.ts";
+import { createStreamingPreview } from "./streaming-preview.ts";
 
 const theme = new Theme(
   {
@@ -173,13 +173,96 @@ test("new invalid or missing candidates clear a prior preview immediately", asyn
   assert.match(plain(component.render(80)), /TWO/);
 
   Reflect.apply(renderer.renderCall, renderer, [
-    { path: "other.ts", tag: "invalid", operations: [] },
+    {
+      path: "a.ts",
+      tag: snapshot.tag,
+      operations: [{ op: "replace", start: 2 }],
+    },
+    theme,
+    context,
+  ]);
+  assert.match(
+    plain(component.render(80)),
+    /TWO/,
+    "an incomplete operation for the same path and tag retains the preview",
+  );
+
+  Reflect.apply(renderer.renderCall, renderer, [
+    { path: "other.ts", tag: snapshot.tag, operations: [] },
     theme,
     context,
   ]);
   const cleared = plain(component.render(80));
   assert.match(cleared, /other\.ts/);
   assert.doesNotMatch(cleared, /TWO|two/);
+});
+
+test("settled preview remains visible until its same-target replacement lands", () => {
+  const store = new SnapshotStore();
+  const snapshot = store.recordRead({
+    canonicalPath: "/project/a.ts",
+    resolvedPath: "/project/a.ts",
+    displayPath: "a.ts",
+    text: "one\ntwo\n",
+    byteIdentity: "identity",
+    seenLines: [1, 2],
+  });
+  let pending: (() => void) | undefined;
+  const renderer = createHashlineRenderer(store, {
+    schedulePreview(callback) {
+      pending = callback;
+      return () => {
+        if (pending === callback) pending = undefined;
+      };
+    },
+  });
+  const state = {};
+  const context = {
+    args: {},
+    state,
+    lastComponent: undefined,
+    invalidate: () => {},
+    cwd: "/project",
+    argsComplete: false,
+    executionStarted: false,
+    isPartial: true,
+    expanded: false,
+    isError: false,
+  };
+  const args = (line: string) => ({
+    path: "a.ts",
+    tag: snapshot.tag,
+    operations: [{ op: "replace", start: 2, end: 2, lines: [line] }],
+  });
+
+  const component = Reflect.apply(renderer.renderCall, renderer, [
+    args("PREVIEW_A"),
+    theme,
+    context,
+  ]);
+  context.lastComponent = component;
+  assert.ok(pending);
+  pending();
+  assert.match(plain(component.render(80)), /PREVIEW_A/);
+  const settledALines = plain(component.render(80)).split("\n");
+  assert.doesNotMatch(settledALines[0] ?? "", /previewing/);
+  assert.match(settledALines.at(-2) ?? "", /previewing/);
+  assert.ok(settledALines.length <= 10);
+
+  Reflect.apply(renderer.renderCall, renderer, [
+    args("PREVIEW_B"),
+    theme,
+    context,
+  ]);
+  const whilePending = plain(component.render(80));
+  assert.match(whilePending, /PREVIEW_A/);
+  assert.doesNotMatch(whilePending, /PREVIEW_B/);
+
+  assert.ok(pending);
+  pending();
+  const settledB = plain(component.render(80));
+  assert.match(settledB, /PREVIEW_B/);
+  assert.doesNotMatch(settledB, /PREVIEW_A/);
 });
 
 test("preview scheduling coalesces latest-only work and never applies superseded jobs", () => {
@@ -201,9 +284,9 @@ test("preview scheduling coalesces latest-only work and never applies superseded
         if (pending === callback) pending = undefined;
       };
     },
-    computeDetails(path, before, after) {
+    computePreview(original, operations, seenLines) {
       computes++;
-      return createEditDetails(path, before, after);
+      return createStreamingPreview(original, operations, seenLines);
     },
   });
   const state = {};
@@ -257,21 +340,23 @@ test("preview scheduling coalesces latest-only work and never applies superseded
   assert.doesNotMatch(plain(component.render(80)), /NEVER|SECOND/);
 });
 
-test("preview refuses oversized snapshots and excessive operation counts", () => {
+test("preview accepts valid long edits above the former conservative caps", () => {
   const store = new SnapshotStore();
-  const text = `${"x".repeat(600 * 1024)}\n`;
+  const sourceLines = ["x".repeat(600 * 1024), ...Array(29).fill("line")];
   const snapshot = store.recordRead({
     canonicalPath: "/project/large.ts",
     resolvedPath: "/project/large.ts",
     displayPath: "large.ts",
-    text,
+    text: `${sourceLines.join("\n")}\n`,
     byteIdentity: "identity",
-    seenLines: [1],
+    seenLines: sourceLines.map((_, index) => index + 1),
   });
+  let pending: (() => void) | undefined;
   let scheduled = 0;
   const renderer = createHashlineRenderer(store, {
-    schedulePreview() {
+    schedulePreview(callback) {
       scheduled++;
+      pending = callback;
       return () => {};
     },
   });
@@ -287,16 +372,189 @@ test("preview refuses oversized snapshots and excessive operation counts", () =>
     expanded: false,
     isError: false,
   };
-  Reflect.apply(renderer.renderCall, renderer, [
+  const component = Reflect.apply(renderer.renderCall, renderer, [
     {
       path: "large.ts",
       tag: snapshot.tag,
-      operations: [{ op: "replace", start: 1, end: 1, lines: ["small"] }],
+      operations: Array.from({ length: 26 }, (_, index) => ({
+        op: "insert-after",
+        line: index + 1,
+        lines: [`inserted-${index + 1}`],
+      })),
     },
     theme,
     context,
   ]);
+
+  assert.equal(scheduled, 1);
+  assert.ok(pending);
+  pending();
+  assert.match(plain(component.render(80)), /inserted-26/);
+});
+
+test("preview still refuses candidates beyond tool and memory bounds", () => {
+  const mebibyte = 1024 * 1024;
+  let scheduled = 0;
+  const schedulePreview = () => {
+    scheduled++;
+    return () => {};
+  };
+  const context = () => ({
+    args: {},
+    state: {},
+    lastComponent: undefined,
+    invalidate: () => {},
+    cwd: "/project",
+    argsComplete: false,
+    executionStarted: false,
+    isPartial: true,
+    expanded: false,
+    isError: false,
+  });
+
+  const smallStore = new SnapshotStore();
+  const small = smallStore.recordRead({
+    canonicalPath: "/project/small.ts",
+    resolvedPath: "/project/small.ts",
+    displayPath: "small.ts",
+    text: "one\n",
+    byteIdentity: "small",
+    seenLines: [1],
+  });
+  const smallRenderer = createHashlineRenderer(smallStore, { schedulePreview });
+  Reflect.apply(smallRenderer.renderCall, smallRenderer, [
+    {
+      path: "small.ts",
+      tag: small.tag,
+      operations: Array.from({ length: 101 }, (_, index) => ({
+        op: "insert-after",
+        line: 1,
+        lines: [`line-${index}`],
+      })),
+    },
+    theme,
+    context(),
+  ]);
+  Reflect.apply(smallRenderer.renderCall, smallRenderer, [
+    {
+      path: "small.ts",
+      tag: small.tag,
+      operations: [
+        {
+          op: "replace",
+          start: 1,
+          end: 1,
+          lines: ["y".repeat(4 * mebibyte)],
+        },
+      ],
+    },
+    theme,
+    context(),
+  ]);
+
+  const largeStore = new SnapshotStore({
+    maxSnapshotBytes: 5 * mebibyte,
+    maxBytes: 6 * mebibyte,
+  });
+  const large = largeStore.recordRead({
+    canonicalPath: "/project/too-large.ts",
+    resolvedPath: "/project/too-large.ts",
+    displayPath: "too-large.ts",
+    text: "x".repeat(4 * mebibyte + 1),
+    byteIdentity: "large",
+    seenLines: [1],
+  });
+  const largeRenderer = createHashlineRenderer(largeStore, { schedulePreview });
+  Reflect.apply(largeRenderer.renderCall, largeRenderer, [
+    {
+      path: "too-large.ts",
+      tag: large.tag,
+      operations: [{ op: "replace", start: 1, end: 1, lines: ["small"] }],
+    },
+    theme,
+    context(),
+  ]);
+
   assert.equal(scheduled, 0);
+});
+
+test("body borders align at the card edge for short and truncated lines", () => {
+  const width = 36;
+  const component = new HashlineEditComponent(theme);
+  component.updateArgs({ path: `${"very-long/".repeat(12)}border.ts` }, false);
+  component.settleSuccess(
+    {
+      diff: `-1 short\n+1 ${"long content ".repeat(8)}`,
+      patch: "patch",
+      firstChangedLine: 1,
+    },
+    false,
+    theme,
+  );
+
+  const lines = component
+    .render(width)
+    .map((line) => line.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, ""));
+  const body = lines.slice(1, -1);
+  assert.equal(lines[0]?.at(-1), "╮");
+  assert.equal(lines.at(-1)?.at(-1), "╯");
+  assert.equal(body.length, 2);
+  for (const line of body) {
+    assert.equal(visibleWidth(line), width);
+    assert.equal(line.at(-1), "│");
+  }
+  assert.match(body[1] ?? "", /… │$/);
+  assert.ok(lines.every((line) => visibleWidth(line) === width));
+});
+
+test("untrusted terminal controls and tabs cannot escape the card", () => {
+  const width = 52;
+  const component = new HashlineEditComponent(theme);
+  component.updateArgs(
+    { path: "safe\t\x1b]0;owned-title\x07\x1b]2;st-owned\x1b\\name\x07.ts" },
+    false,
+  );
+  component.settleSuccess(
+    {
+      diff: "+1 alpha\tbeta\x07\x1b[31mred\x1b[0m\x1b]8;;https://evil.test\x07link\x1b]8;;\x07",
+      patch: "patch",
+      firstChangedLine: 1,
+    },
+    false,
+    theme,
+  );
+
+  const rendered = component.render(width);
+  const text = plain(rendered);
+  assert.doesNotMatch(rendered.join(""), /\x1b\]|\x07|\t|\x1b\[31m/);
+  assert.doesNotMatch(text, /owned-title|st-owned|https:\/\/evil\.test/);
+  assert.match(text, /safe {4}name\.ts/);
+  assert.match(text, /alpha {4}betaredlink/);
+  for (const line of text.split("\n")) {
+    assert.equal(visibleWidth(line), width);
+    assert.match(line, /[╮│╯]$/);
+  }
+});
+
+test("pending status and hidden marker share the collapsed row budget", () => {
+  const component = new HashlineEditComponent(theme);
+  component.updateArgs({ path: "pending.ts" }, false);
+  const generation = component.beginPreview("preview", "target");
+  component.setPreview(
+    "preview",
+    generation,
+    Array.from(
+      { length: 10 },
+      (_, index) => `+${index + 1} line-${index + 1}`,
+    ).join("\n"),
+  );
+
+  const lines = plain(component.render(60)).split("\n");
+  assert.equal(lines.length, 10);
+  assert.match(lines[1] ?? "", /4 diff lines above/);
+  assert.doesNotMatch(lines.join("\n"), /line-1\b/);
+  assert.match(lines.join("\n"), /line-10/);
+  assert.match(lines.at(-2) ?? "", /previewing/);
 });
 
 test("collapsed and expanded rendering use bounded bottom-pinned logical diff tails", () => {
@@ -312,7 +570,7 @@ test("collapsed and expanded rendering use bounded bottom-pinned logical diff ta
     theme,
   );
   const collapsed = plain(component.render(60));
-  assert.match(collapsed, /42 diff lines above/);
+  assert.match(collapsed, /43 diff lines above/);
   assert.doesNotMatch(collapsed, /line-1\b/);
   assert.match(collapsed, /line-50/);
   assert.ok(component.render(60).every((line) => visibleWidth(line) <= 60));
@@ -323,10 +581,74 @@ test("collapsed and expanded rendering use bounded bottom-pinned logical diff ta
     theme,
   );
   const expanded = plain(component.render(60));
-  assert.match(expanded, /10 diff lines above/);
+  assert.match(expanded, /11 diff lines above/);
   assert.match(expanded, /line-50/);
   assert.doesNotMatch(expanded, /[0-9A-F]{16}|"operations"/);
-  assert.ok(component.render(60).length <= 43);
+  assert.ok(component.render(60).length <= 42);
+});
+
+test("a late preview callback cannot overwrite an authoritative result", () => {
+  const store = new SnapshotStore();
+  const snapshot = store.recordRead({
+    canonicalPath: "/project/a.ts",
+    resolvedPath: "/project/a.ts",
+    displayPath: "a.ts",
+    text: "old\n",
+    byteIdentity: "identity",
+    seenLines: [1],
+  });
+  let callback: (() => void) | undefined;
+  const renderer = createHashlineRenderer(store, {
+    schedulePreview(next) {
+      callback = next;
+      return () => {};
+    },
+  });
+  const state = {};
+  const context = {
+    args: {},
+    state,
+    lastComponent: undefined,
+    invalidate: () => {},
+    cwd: "/project",
+    argsComplete: false,
+    executionStarted: false,
+    isPartial: true,
+    expanded: false,
+    isError: false,
+  };
+  const component = Reflect.apply(renderer.renderCall, renderer, [
+    {
+      path: "a.ts",
+      tag: snapshot.tag,
+      operations: [{ op: "replace", start: 1, end: 1, lines: ["preview"] }],
+    },
+    theme,
+    context,
+  ]);
+  context.lastComponent = component;
+  assert.ok(callback);
+
+  Reflect.apply(renderer.renderResult, renderer, [
+    {
+      content: [{ type: "text", text: "done" }],
+      details: {
+        diff: "-1 old\n+1 authoritative",
+        patch: "patch",
+        firstChangedLine: 1,
+      },
+    },
+    { expanded: false, isPartial: false },
+    theme,
+    context,
+  ]);
+  const finalCard = plain(component.render(80));
+  callback();
+
+  assert.equal(plain(component.render(80)), finalCard);
+  assert.match(finalCard, /✓ edit a\.ts:1/);
+  assert.match(finalCard, /authoritative/);
+  assert.doesNotMatch(finalCard, /previewing/);
 });
 
 test("authoritative result mutates the call card, emits no duplicate result, and shows final errors", () => {
