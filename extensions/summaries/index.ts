@@ -1,7 +1,4 @@
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadSummaryConfig, saveSummaryConfig } from "./src/config.ts";
 import { summarizeRun } from "./src/summarizer.ts";
 import {
@@ -18,7 +15,6 @@ import {
 } from "./src/ui.ts";
 
 const RECAP_ENTRY_TYPE = "summary-recap";
-const STATUS_KEY = "summaries";
 const SHUTDOWN_WAIT_MS = 1_000;
 
 async function waitForCancellation(
@@ -44,16 +40,6 @@ export default function (pi: ExtensionAPI) {
   const runBoundary = createRunBoundary();
   const activeSummaries = new Map<AbortController, Promise<void>>();
   let sessionActive = false;
-  let statusContext: ExtensionContext | undefined;
-
-  const updateStatus = () => {
-    statusContext?.ui.setStatus(
-      STATUS_KEY,
-      activeSummaries.size > 0
-        ? statusContext.ui.theme.fg("muted", "✦ summarizing run…")
-        : undefined,
-    );
-  };
 
   pi.registerEntryRenderer<RecapEntryData>(
     RECAP_ENTRY_TYPE,
@@ -62,7 +48,6 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     sessionActive = ctx.mode === "tui";
-    statusContext = ctx;
     runBoundary.reset();
   });
 
@@ -83,7 +68,6 @@ export default function (pi: ExtensionAPI) {
 
     const config = loadSummaryConfig();
     const controller = new AbortController();
-    statusContext = ctx;
     const task = (async () => {
       let recap: RecapEntryData;
       try {
@@ -112,11 +96,9 @@ export default function (pi: ExtensionAPI) {
       pi.appendEntry(RECAP_ENTRY_TYPE, recap);
     })().finally(() => {
       activeSummaries.delete(controller);
-      updateStatus();
     });
 
     activeSummaries.set(controller, task);
-    updateStatus();
     // Keep the next prompt responsive while the inexpensive recap model runs.
     // The recap is a custom entry, so it cannot affect a later agent turn.
     void task;
@@ -132,8 +114,6 @@ export default function (pi: ExtensionAPI) {
       SHUTDOWN_WAIT_MS,
     );
     activeSummaries.clear();
-    statusContext?.ui.setStatus(STATUS_KEY, undefined);
-    statusContext = undefined;
   });
 
   pi.registerCommand("summary-model", {
