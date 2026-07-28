@@ -293,7 +293,7 @@ function downloadAsset(client: HttpClient.HttpClient, initialUrl: URL) {
                 ),
               );
             }
-            if (!URL.canParse(location, url)) {
+            if (!URL.canParse(location, url.href)) {
               return yield* Effect.fail(
                 new Error(
                   `download returned an invalid redirect URL: ${location}`,

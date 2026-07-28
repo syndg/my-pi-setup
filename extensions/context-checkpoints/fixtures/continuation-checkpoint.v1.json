@@ -1,0 +1,73 @@
+{
+  "schemaVersion": "context-checkpoint/v1",
+  "goal": "Implement a resumable context checkpoint core.",
+  "constraintsAndPreferences": [
+    "Keep the module isolated from Pi lifecycle hooks.",
+    "Preserve the durable transcript."
+  ],
+  "completedWork": [
+    "Defined the first checkpoint schema."
+  ],
+  "workingSet": [
+    "src/types.ts",
+    "src/validation.ts"
+  ],
+  "decisions": [
+    {
+      "decision": "Use strict versioned JSON.",
+      "rationale": "Future readers can reject unsupported shapes instead of guessing."
+    }
+  ],
+  "changedFiles": [
+    {
+      "path": "src/types.ts",
+      "status": "created",
+      "summary": "Defines checkpoint v1."
+    }
+  ],
+  "testsAndOutcomes": [
+    {
+      "command": "npm test",
+      "status": "passed",
+      "outcome": "Checkpoint contract tests passed."
+    }
+  ],
+  "unresolvedQuestions": [
+    "Which artifact store will own persistence?"
+  ],
+  "blockers": [],
+  "nextActions": [
+    "Connect the schema to the future handoff adapter."
+  ],
+  "criticalReferences": [
+    {
+      "kind": "session-entry",
+      "id": "entry-01",
+      "label": "Original task"
+    },
+    {
+      "kind": "artifact",
+      "id": "artifact-01",
+      "uri": "context://artifact-01",
+      "label": "Full validation log"
+    }
+  ],
+  "contextPolicyState": {
+    "pressure": "orange",
+    "measurementSource": "pi-usage",
+    "residentTokens": 157000,
+    "effectiveWireTokens": null,
+    "safeLimitTokens": 190000,
+    "headroomTokens": 33000,
+    "runwayRuns": 1.1,
+    "capturedAtMs": 1785260000000,
+    "notes": [
+      "Context decay is not active."
+    ]
+  },
+  "originalSession": {
+    "sessionId": "session-original",
+    "branchLeafId": "entry-01",
+    "transcriptPath": "/tmp/session-original.jsonl"
+  }
+}

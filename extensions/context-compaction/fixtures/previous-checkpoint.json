@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "context-checkpoint/v1",
+  "goal": "Ship checkpoint-shaped compaction.",
+  "constraintsAndPreferences": ["Preserve native overflow recovery."],
+  "completedWork": ["Stabilized the checkpoint schema."],
+  "workingSet": ["src/old.ts"],
+  "decisions": [{"decision": "Use exact JSON.", "rationale": "Validation must reject decorated output."}],
+  "changedFiles": [{"path": "src/old.ts", "status": "modified"}],
+  "testsAndOutcomes": [],
+  "unresolvedQuestions": [],
+  "blockers": [],
+  "nextActions": ["Implement the summary engine."],
+  "criticalReferences": [{"kind": "artifact", "id": "artifact-prior", "uri": "context://artifact-prior"}],
+  "contextPolicyState": {
+    "pressure": "orange",
+    "measurementSource": "pi-usage",
+    "residentTokens": 170000,
+    "effectiveWireTokens": null,
+    "safeLimitTokens": 190000,
+    "headroomTokens": 20000,
+    "runwayRuns": 1,
+    "capturedAtMs": 1000,
+    "notes": []
+  }
+}

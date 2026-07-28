@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "context-checkpoint/v1",
+  "goal": "Ship checkpoint-shaped compaction.",
+  "constraintsAndPreferences": ["Keep Phase 6A disconnected from lifecycle hooks."],
+  "completedWork": ["Implemented boundary selection."],
+  "workingSet": ["src/engine.ts", "engine.test.ts"],
+  "decisions": [{"decision": "Retain about 10K tokens.", "rationale": "A smaller tail leaves useful runway."}],
+  "changedFiles": [{"path": "src/engine.ts", "status": "created"}],
+  "testsAndOutcomes": [{"command": "npm test", "status": "passed", "outcome": "Prototype tests passed."}],
+  "unresolvedQuestions": [],
+  "blockers": [],
+  "nextActions": ["Review continuation fixtures."],
+  "criticalReferences": [{"kind": "session-entry", "id": "u2", "label": "Retained boundary"}],
+  "contextPolicyState": {
+    "pressure": "orange",
+    "measurementSource": "message-estimate",
+    "residentTokens": 175000,
+    "effectiveWireTokens": null,
+    "safeLimitTokens": 190000,
+    "headroomTokens": 15000,
+    "runwayRuns": 1,
+    "capturedAtMs": 2000,
+    "notes": []
+  }
+}

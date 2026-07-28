@@ -37,6 +37,7 @@ import { SendError, SpawnError } from "../domain.ts";
 const CLAUDE_CONTEXT_WINDOW = 200_000;
 const INTERRUPT_TIMEOUT_MS = 2_000;
 const PREVIEW_MAX_LENGTH = 4_096;
+export const CLAUDE_DISALLOWED_TOOLS = ["Agent", "Task"] as const;
 
 // --- Binary resolution --------------------------------------------------------
 
@@ -334,7 +335,7 @@ const makeClaudeSession = (
             allowDangerouslySkipPermissions: true,
             // Keep child orchestration inside this extension's global manager
             // and concurrency cap rather than Claude Code's native subagents.
-            disallowedTools: ["Agent", "Task"],
+            disallowedTools: [...CLAUDE_DISALLOWED_TOOLS],
             // For cwds pi marked untrusted, restrict to user-level settings so
             // an untrusted project's config cannot reconfigure the child.
             ...(task.parent.projectTrusted

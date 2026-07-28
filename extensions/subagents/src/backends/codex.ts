@@ -25,6 +25,14 @@ import type {
 } from "../domain.ts";
 import { SendError, SpawnError } from "../domain.ts";
 
+/** Native Codex recursion is disabled; this is not an OS sandbox boundary. */
+export const CODEX_APP_SERVER_ARGS = [
+  "app-server",
+  "--stdio",
+  "--disable",
+  "multi_agent",
+] as const;
+
 const REQUEST_TIMEOUT_MS = 30_000;
 const MODEL_LIST_TIMEOUT_MS = 5_000;
 const INTERRUPT_FALLBACK_MS = 1_500;
@@ -319,7 +327,7 @@ const makeCodexSession = (
 
     const child = yield* Effect.try({
       try: () =>
-        spawn(binary, ["app-server", "--stdio"], {
+        spawn(binary, [...CODEX_APP_SERVER_ARGS], {
           cwd: task.cwd,
           env: process.env,
           stdio: ["pipe", "pipe", "pipe"],

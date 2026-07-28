@@ -1,5 +1,5 @@
 const DEFAULT_MAX_MESSAGES = 100;
-export const MAX_SUBAGENT_MESSAGE_CHARS = 16 * 1024;
+export const MAX_SUBAGENT_MESSAGE_CHARS = 4 * 1024;
 const MAX_REPLY_TO_CHARS = 128;
 
 export interface ChildToParentMessage {
@@ -9,6 +9,39 @@ export interface ChildToParentMessage {
   readonly message: string;
   readonly replyTo?: string;
   readonly createdAt: number;
+}
+
+export function liveMessageBudgetBytes(
+  reportBudgetBytes: number | undefined,
+  pressureBudgetBytes: number | undefined,
+  maximum = MAX_SUBAGENT_MESSAGE_CHARS,
+) {
+  return Math.max(
+    256,
+    Math.min(
+      maximum,
+      reportBudgetBytes ?? maximum,
+      pressureBudgetBytes ?? maximum,
+    ),
+  );
+}
+
+export function boundedLiveMessage(message: string, maxBytes: number) {
+  if (Buffer.byteLength(message, "utf8") <= maxBytes) return message;
+  const marker =
+    "\n[child message truncated; full text remains in subagent_inbox]";
+  const target = Math.max(1, maxBytes - Buffer.byteLength(marker, "utf8"));
+  let end = Math.min(message.length, target);
+  while (end > 0 && Buffer.byteLength(message.slice(0, end), "utf8") > target)
+    end--;
+  return `${message.slice(0, end)}${marker}`;
+}
+
+export function shouldWakeForChildMessage(message: ChildToParentMessage) {
+  return (
+    message.replyTo !== undefined ||
+    /^\s*\[(?:urgent|failure|failed|error)\b/i.test(message.message)
+  );
 }
 
 export interface ParentToChildMessage {

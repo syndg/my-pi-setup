@@ -2,9 +2,18 @@ import {
   createReadToolDefinition,
   truncateHead,
   type ReadOperations,
+  type ReadToolDetails,
 } from "@earendil-works/pi-coding-agent";
 import { constants } from "node:fs";
-import { access, readFile, realpath } from "node:fs/promises";
+import {
+  access,
+  mkdtemp,
+  readFile,
+  realpath,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { detectImageMimeFromFile } from "./image-mime.ts";
 import { displayPath } from "./path.ts";
 import { READ_DESCRIPTION, READ_GUIDELINES, READ_SNIPPET } from "./prompt.ts";
@@ -17,6 +26,29 @@ import { computeByteIdentity, decodeText, splitLogicalText } from "./text.ts";
 
 interface HashlineReadOperations extends ReadOperations {
   canonicalize: (absolutePath: string) => Promise<string>;
+}
+
+export interface HashlineReadDetails extends ReadToolDetails {
+  fullOutputPath?: string;
+}
+
+type PersistSelectedText = (text: string) => Promise<string>;
+
+function safeTempSegment(value: string | undefined) {
+  const normalized = value?.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 80);
+  return normalized || `process-${process.pid}`;
+}
+
+async function persistSelectedText(text: string) {
+  const directory = await mkdtemp(
+    join(
+      tmpdir(),
+      `pi-hashline-${safeTempSegment(process.env.PI_SESSION_ID)}-`,
+    ),
+  );
+  const outputPath = join(directory, "selected.txt");
+  await writeFile(outputPath, text, { encoding: "utf8", mode: 0o600 });
+  return outputPath;
 }
 
 const defaultOperations: HashlineReadOperations = {
@@ -47,8 +79,10 @@ function selectedSource(buffer: Buffer, input: ReadInput) {
   const truncation = truncateHead(selected);
   return {
     startLine: startIndex + 1,
+    selectedText: selected,
     sourcePrefix: truncation.content,
     displayedRows: truncation.outputLines,
+    truncated: truncation.truncated,
     firstLineExceedsLimit: truncation.firstLineExceedsLimit,
   };
 }
@@ -82,9 +116,13 @@ export function formatHashlineRead(input: {
 export function createHashlineReadTool(
   cwd: string,
   snapshots: SnapshotStore,
-  options: { operations?: HashlineReadOperations } = {},
+  options: {
+    operations?: HashlineReadOperations;
+    persistSelectedText?: PersistSelectedText;
+  } = {},
 ) {
   const operations = options.operations ?? defaultOperations;
+  const persist = options.persistSelectedText ?? persistSelectedText;
   const renderer = createReadToolDefinition(cwd);
 
   return {
@@ -104,6 +142,7 @@ export function createHashlineReadTool(
       let capturedPath: string | undefined;
       let capturedBuffer: Buffer | undefined;
       let mimeType: string | null | undefined;
+      let selectedSpillPath: string | undefined;
       const wrapped = createReadToolDefinition(context.cwd, {
         operations: {
           access: operations.access,
@@ -115,6 +154,16 @@ export function createHashlineReadTool(
           async readFile(path) {
             capturedPath = path;
             capturedBuffer = await operations.readFile(path);
+            if (!mimeType) {
+              const selected = selectedSource(capturedBuffer, input);
+              if (selected?.truncated) {
+                try {
+                  selectedSpillPath = await persist(selected.selectedText);
+                } catch {
+                  selectedSpillPath = undefined;
+                }
+              }
+            }
             return capturedBuffer;
           },
         },
@@ -126,7 +175,24 @@ export function createHashlineReadTool(
         onUpdate,
         context,
       );
-      const output = result.content[0];
+      const baseResult = selectedSpillPath
+        ? {
+            ...result,
+            content: result.content.map((part, index) =>
+              index === 0 && part.type === "text"
+                ? {
+                    ...part,
+                    text: `${part.text}\n\n[Complete selected text saved to: ${selectedSpillPath}]`,
+                  }
+                : part,
+            ),
+            details: {
+              ...(result.details ?? {}),
+              fullOutputPath: selectedSpillPath,
+            } satisfies HashlineReadDetails,
+          }
+        : result;
+      const output = baseResult.content[0];
       if (
         !capturedPath ||
         !capturedBuffer ||
@@ -134,14 +200,14 @@ export function createHashlineReadTool(
         output?.type !== "text" ||
         capturedBuffer.byteLength > SNAPSHOT_TEXT_LIMIT_BYTES
       ) {
-        return result;
+        return baseResult;
       }
 
       let decoded: ReturnType<typeof decodeText>;
       try {
         decoded = decodeText(capturedBuffer);
       } catch {
-        return result;
+        return baseResult;
       }
       const selected = selectedSource(capturedBuffer, input);
       if (
@@ -149,7 +215,7 @@ export function createHashlineReadTool(
         selected.firstLineExceedsLimit ||
         !output.text.startsWith(selected.sourcePrefix)
       ) {
-        return result;
+        return baseResult;
       }
 
       if (signal?.aborted) throw new Error("Operation aborted");
@@ -157,7 +223,7 @@ export function createHashlineReadTool(
       try {
         canonicalPath = await operations.canonicalize(capturedPath);
       } catch {
-        return result;
+        return baseResult;
       }
       if (signal?.aborted) throw new Error("Operation aborted");
 
@@ -189,11 +255,15 @@ export function createHashlineReadTool(
           suffix,
         });
         return {
-          ...result,
-          content: [{ type: "text" as const, text: formatted.text }],
+          ...baseResult,
+          content: baseResult.content.map((part, index) =>
+            index === 0 && part.type === "text"
+              ? { type: "text" as const, text: formatted.text }
+              : part,
+          ),
         };
       } catch (error) {
-        if (error instanceof Error) return result;
+        if (error instanceof Error) return baseResult;
         throw error;
       }
     },

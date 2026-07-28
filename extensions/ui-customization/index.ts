@@ -20,6 +20,12 @@ import {
   isGitInfoState,
   isModelInfoState,
 } from "../shared/dashboard-state.ts";
+import {
+  CONTEXT_GOVERNOR_CHANNEL,
+  emptyGovernorState,
+  isGovernorState,
+} from "../shared/context-governor-state.ts";
+import { formatContextFooter } from "./src/context-footer.ts";
 
 type Rgb = [number, number, number];
 interface RenderableNode {
@@ -146,12 +152,6 @@ function hideThemesSection(component: RenderableNode) {
   return false;
 }
 
-function formatTokens(tokens: number) {
-  if (tokens < 1_000) return `${tokens}`;
-  if (tokens < 1_000_000) return `${Math.round(tokens / 1_000)}k`;
-  return `${(tokens / 1_000_000).toFixed(1)}m`;
-}
-
 function formatDirectory(cwd: string) {
   const home = homedir();
   if (cwd === home) return "~";
@@ -188,6 +188,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
   let title = "pi";
   let modelInfo = emptyModelInfoState();
   let gitInfo = emptyGitInfoState();
+  let governorState = emptyGovernorState();
   let requestRender: (() => void) | undefined;
   let activeTui: DashboardTui | undefined;
   let themeRemovalTimers: Array<ReturnType<typeof setTimeout>> = [];
@@ -203,6 +204,15 @@ export default function uiCustomization(pi: ExtensionAPI) {
     gitInfo = value;
     requestRender?.();
   });
+
+  const stopGovernorListener = pi.events.on(
+    CONTEXT_GOVERNOR_CHANNEL,
+    (value) => {
+      if (!isGovernorState(value)) return;
+      governorState = value;
+      requestRender?.();
+    },
+  );
 
   function scheduleThemeRemoval(tui: DashboardTui) {
     for (const timer of themeRemovalTimers) clearTimeout(timer);
@@ -260,29 +270,43 @@ export default function uiCustomization(pi: ExtensionAPI) {
             git += ` · ${linkedPr}`;
           }
 
-          const contextPercent =
-            modelInfo.contextPercent === null
-              ? "?"
-              : `${Math.round(modelInfo.contextPercent)}`;
-          const contextWindow =
-            modelInfo.contextWindow > 0
-              ? formatTokens(modelInfo.contextWindow)
-              : "?";
           const tps =
             modelInfo.tokensPerSecond === null
               ? "— tok/s"
               : `${Math.round(modelInfo.tokensPerSecond)} tok/s`;
-          const usage = `${contextPercent}%/${contextWindow} · $${modelInfo.cost.toFixed(2)} · ${tps}`;
+          const activity = `$${modelInfo.cost.toFixed(2)} · ${tps}`;
           const model = modelInfo.provider
             ? `${modelInfo.provider}/${modelInfo.modelId} · ${modelInfo.thinking}`
             : modelInfo.modelId;
 
           const lines = [
             columns(directory, theme.fg("muted", model), width),
-            columns(theme.fg("muted", usage), theme.fg("muted", git), width),
+            columns(theme.fg("muted", activity), theme.fg("muted", git), width),
           ];
 
-          // Extension statuses render after the two dashboard lines, one per row.
+          const contextSegments = formatContextFooter(governorState, width);
+          if (contextSegments.length > 0) {
+            const contextLine = contextSegments
+              .map((segment) => {
+                switch (segment.tone) {
+                  case "green":
+                    return theme.fg("success", segment.text);
+                  case "yellow":
+                    return theme.fg("warning", segment.text);
+                  case "orange":
+                    return theme.fg("thinkingHigh", segment.text);
+                  case "red":
+                  case "emergency":
+                    return theme.fg("error", segment.text);
+                  case "muted":
+                    return theme.fg("muted", segment.text);
+                }
+              })
+              .join("");
+            lines.push(contextLine);
+          }
+
+          // Extension statuses render after the dashboard lines, one per row.
           const statuses = footerData.getExtensionStatuses();
           const statusLines = Array.from(statuses.entries())
             .sort(([a], [b]) => a.localeCompare(b))
@@ -306,6 +330,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
     title = formatDirectory(ctx.cwd);
     modelInfo = emptyModelInfoState();
     gitInfo = emptyGitInfoState();
+    governorState = emptyGovernorState();
     install(ctx);
   });
 
@@ -316,6 +341,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
   pi.on("session_shutdown", (_event, ctx) => {
     stopModelListener();
     stopGitListener();
+    stopGovernorListener();
     for (const timer of themeRemovalTimers) clearTimeout(timer);
     themeRemovalTimers = [];
     activeTui = undefined;

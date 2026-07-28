@@ -1,0 +1,10 @@
+[
+  {
+    "recap": "Implemented strict checkpoint validation and added fixtures.",
+    "next": "Run focused tests."
+  },
+  {
+    "recap": "Ran focused tests and fixed normalization edge cases.",
+    "next": "Wire the checkpoint into handoff after schema approval."
+  }
+]

@@ -1,0 +1,10 @@
+{
+  "name": "context-handoff",
+  "private": true,
+  "type": "module",
+  "exports": "./index.ts",
+  "scripts": {
+    "check": "tsc --noEmit -p .",
+    "test": "node --test --experimental-strip-types *.test.ts"
+  }
+}

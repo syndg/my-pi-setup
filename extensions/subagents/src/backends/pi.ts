@@ -36,6 +36,8 @@ import type {
 import type { SubagentEvent, SubagentMeta, TranscriptPart } from "../domain.ts";
 import { SendError, SpawnError } from "../domain.ts";
 import { createToolCallTimeoutGuard } from "../../../shared/tool-call-timeout.ts";
+import { childToolPolicy } from "../../../shared/child-session.ts";
+import { MAX_SUBAGENT_MESSAGE_CHARS } from "../messaging.ts";
 
 const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000;
 
@@ -53,7 +55,7 @@ function createMessageOrchestratorTool(task: BackendSpawnTask) {
     parameters: Type.Object({
       message: Type.String({
         minLength: 1,
-        maxLength: 16 * 1024,
+        maxLength: MAX_SUBAGENT_MESSAGE_CHARS,
         description: "Message for the parent orchestrator",
       }),
       reply_to: Type.Optional(
@@ -80,19 +82,6 @@ function createMessageOrchestratorTool(task: BackendSpawnTask) {
     },
   });
 }
-
-/** Tools that headless children must not receive. Everything else stays enabled. */
-const CHILD_EXCLUDED_TOOL_NAMES = [
-  "subagent_spawn",
-  "subagent_wait",
-  "subagent_cancel",
-  "subagent_check",
-  "subagent_list",
-  "subagent_send",
-  "subagent_inbox",
-  "workflow",
-  "ask_user",
-] as const;
 
 // --- Model + effort resolution -----------------------------------------------
 
@@ -338,7 +327,9 @@ const makePiSession = (
           model,
           thinkingLevel,
           customTools: [createMessageOrchestratorTool(task)],
-          excludeTools: [...CHILD_EXCLUDED_TOOL_NAMES],
+          ...childToolPolicy(task.toolProfile ?? "coding", [
+            "message_orchestrator",
+          ]),
         });
         // Start child extension session hooks/resources in headless mode.
         // A rejection here would otherwise leak the freshly created session:

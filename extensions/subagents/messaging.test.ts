@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  boundedLiveMessage,
+  liveMessageBudgetBytes,
   MAX_SUBAGENT_MESSAGE_CHARS,
   ParentChildMailbox,
+  shouldWakeForChildMessage,
 } from "./src/messaging.ts";
 
 test("parent messages carry ids and reply instructions", () => {
@@ -73,4 +76,32 @@ test("mailbox rejects empty and oversized messages", () => {
       ),
     /at most/,
   );
+});
+
+test("live messages use the tightest pressure/profile budget", () => {
+  const budget = liveMessageBudgetBytes(3_072, 2_048);
+  assert.equal(budget, 2_048);
+  const bounded = boundedLiveMessage("🙂".repeat(2_000), budget);
+  assert.ok(Buffer.byteLength(bounded, "utf8") <= budget);
+  assert.match(bounded, /full text remains in subagent_inbox/);
+});
+
+test("routine live messages do not wake but failures, urgency, and replies do", () => {
+  const mailbox = new ParentChildMailbox();
+  const info = mailbox.receiveChildMessage("sa-1", "one", "progress update");
+  const failure = mailbox.receiveChildMessage(
+    "sa-1",
+    "one",
+    "[failure] tests failed",
+  );
+  const urgent = mailbox.receiveChildMessage(
+    "sa-1",
+    "one",
+    "[urgent] need input",
+  );
+  const reply = mailbox.receiveChildMessage("sa-1", "one", "answer", "pm-1");
+  assert.equal(shouldWakeForChildMessage(info), false);
+  assert.equal(shouldWakeForChildMessage(failure), true);
+  assert.equal(shouldWakeForChildMessage(urgent), true);
+  assert.equal(shouldWakeForChildMessage(reply), true);
 });

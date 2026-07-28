@@ -80,6 +80,8 @@ interface MutableSnapshot {
   title: string;
   prompt: string;
   cwd: string;
+  toolProfile?: SpawnTask["toolProfile"];
+  reportBudgetBytes?: number;
   status: SubagentStatus;
   createdAt: number;
   settledAt?: number;
@@ -520,6 +522,8 @@ const makeManager = Effect.gen(function* () {
             title: task.title,
             prompt: task.prompt,
             cwd: task.cwd,
+            toolProfile: task.toolProfile,
+            reportBudgetBytes: task.reportBudgetBytes,
             status: "running",
             createdAt: Date.now(),
             meta,

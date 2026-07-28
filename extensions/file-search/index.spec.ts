@@ -305,7 +305,7 @@ it("release assets cover macOS and Linux on arm64 and x64 over HTTPS", () => {
     for (const arch of ["arm64", "x64"] as const) {
       for (const tool of ["fd", "rg"] as const) {
         const asset = releaseAsset(tool, { os, arch });
-        assert.isDefined(asset, `${tool} ${os}/${arch}`);
+        if (!asset) assert.fail(`${tool} ${os}/${arch}`);
         assert.match(asset.url, /^https:\/\//);
         assert.isTrue(asset.url.endsWith(asset.fileName));
         assert.match(asset.sha256, /^[a-f0-9]{64}$/);
@@ -395,12 +395,13 @@ it.effect("process output is streamed to a complete spill file", () =>
     assert.isTrue(formatted.truncated);
     assert.equal(formatted.lineCount, 3000);
     assert.match(formatted.text, /2000 of 3000 lines/);
-    assert.isDefined(formatted.fullOutputPath);
+    const fullOutputPath = formatted.fullOutputPath;
+    if (!fullOutputPath) assert.fail("expected a complete spill artifact");
 
     const fs = yield* FileSystem.FileSystem;
-    const fullOutput = yield* fs.readFileString(formatted.fullOutputPath);
+    const fullOutput = yield* fs.readFileString(fullOutputPath);
     assert.equal(fullOutput, "line\n".repeat(3000));
-    yield* fs.remove(dirname(formatted.fullOutputPath), {
+    yield* fs.remove(dirname(fullOutputPath), {
       recursive: true,
       force: true,
     });

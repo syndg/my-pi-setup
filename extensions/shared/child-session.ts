@@ -10,20 +10,70 @@ import {
 
 const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000;
 
-/** Tools that headless children must not receive. Everything else stays enabled. */
-export const CHILD_EXCLUDED_TOOL_NAMES = [
+export const CHILD_TOOL_PROFILE_NAMES = [
+  "research",
+  "coding",
+  "review",
+  "minimal",
+] as const;
+
+export type ChildToolProfile = (typeof CHILD_TOOL_PROFILE_NAMES)[number];
+
+/** Defense-in-depth: child profiles can never opt into recursive orchestration or user interaction. */
+export const CHILD_FORBIDDEN_TOOL_NAMES = [
   "subagent_spawn",
   "subagent_wait",
+  "subagent_send",
+  "subagent_inbox",
   "subagent_cancel",
   "subagent_check",
   "subagent_list",
+  "bg_start",
+  "bg_status",
+  "bg_list",
+  "bg_kill",
   "workflow",
   "ask_user",
 ] as const;
 
-/** Fresh SDK options avoid turning the denylist into an accidental allowlist. */
-export function childToolPolicy() {
-  return { excludeTools: [...CHILD_EXCLUDED_TOOL_NAMES] };
+const CHILD_PROFILE_TOOLS: Record<ChildToolProfile, readonly string[]> = {
+  research: ["read", "bash", "grep", "find", "ls", "rg", "fd", "mcp"],
+  coding: [
+    "read",
+    "bash",
+    "edit",
+    "write",
+    "grep",
+    "find",
+    "ls",
+    "rg",
+    "fd",
+    "mcp",
+  ],
+  review: ["read", "bash", "grep", "find", "ls", "rg", "fd"],
+  minimal: ["read"],
+};
+
+/**
+ * Explicit schema allowlists for headless children. Required one-shot/bridge
+ * tools are additive, while the safety denylist remains a final backstop.
+ */
+export function childToolPolicy(
+  profile: ChildToolProfile = "coding",
+  requiredTools: readonly string[] = [],
+) {
+  const forbidden = new Set<string>(CHILD_FORBIDDEN_TOOL_NAMES);
+  const tools = [
+    ...new Set(
+      [...CHILD_PROFILE_TOOLS[profile], ...requiredTools].filter(
+        (name) => !forbidden.has(name),
+      ),
+    ),
+  ];
+  return {
+    tools,
+    excludeTools: [...CHILD_FORBIDDEN_TOOL_NAMES],
+  };
 }
 
 export interface ChildResourceOptions {

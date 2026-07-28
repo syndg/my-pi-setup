@@ -1,0 +1,13 @@
+{
+  "name": "context-memory",
+  "private": true,
+  "type": "module",
+  "exports": "./index.ts",
+  "scripts": {
+    "check": "/Volumes/External/Coding/pi-mono-fullscreen/node_modules/.bin/tsc --noEmit -p .",
+    "test": "node --test --experimental-strip-types *.test.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

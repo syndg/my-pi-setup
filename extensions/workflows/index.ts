@@ -76,6 +76,13 @@ import {
 } from "./runner.ts";
 import { runWorkflowSandbox } from "./sandbox.ts";
 import { safeStringify, writeFileAtomic } from "./serialization.ts";
+import {
+  activateWorkflowTool,
+  branchHasWorkflowActivation,
+  initializeWorkflowTool,
+  shouldActivateWorkflow,
+} from "./activation.ts";
+import { offerCompletion } from "../context-output/src/completion.ts";
 
 const PREVIEW_LENGTH = 200;
 const EMIT_INTERVAL_MS = 120;
@@ -259,6 +266,7 @@ export default function workflows(pi: ExtensionAPI) {
   let lastUi: ExtensionContext["ui"] | undefined;
   let completedRuns = 0;
   let failedRuns = 0;
+  let toolActivated = false;
   const updateIndicator = () => {
     const ui = lastUi;
     if (!ui) return;
@@ -286,9 +294,40 @@ export default function workflows(pi: ExtensionAPI) {
     else failedRuns += 1;
   };
 
+  const initializeSessionToolActivation = (ctx: ExtensionContext) => {
+    toolActivated = branchHasWorkflowActivation(
+      ctx.sessionManager.getEntries(),
+    );
+    initializeWorkflowTool(pi, toolActivated);
+  };
+
+  const syncTreeToolActivation = (ctx: ExtensionContext) => {
+    toolActivated ||= branchHasWorkflowActivation(
+      ctx.sessionManager.getEntries(),
+    );
+    initializeWorkflowTool(pi, toolActivated);
+  };
+
   pi.on("session_start", (_event, ctx) => {
     if (ctx.hasUI) lastUi = ctx.ui;
+    initializeSessionToolActivation(ctx);
     updateIndicator();
+  });
+
+  pi.on("session_tree", (_event, ctx) => {
+    syncTreeToolActivation(ctx);
+  });
+
+  pi.on("input", (event) => {
+    if (
+      !toolActivated &&
+      event.source !== "extension" &&
+      shouldActivateWorkflow(event.text)
+    ) {
+      toolActivated = true;
+      activateWorkflowTool(pi);
+    }
+    return { action: "continue" };
   });
 
   pi.on("session_shutdown", async () => {
@@ -368,8 +407,6 @@ export default function workflows(pi: ExtensionAPI) {
     name: "workflow",
     label: "Workflow",
     description: WORKFLOW_TOOL_DESCRIPTION,
-    promptSnippet: WORKFLOW_PROMPT_SNIPPET,
-    promptGuidelines: WORKFLOW_PROMPT_GUIDELINES,
     parameters: WorkflowParams,
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
@@ -689,17 +726,39 @@ export default function workflows(pi: ExtensionAPI) {
             activeRuns.delete(runId);
             recordSettledRun(details.status);
             updateIndicator();
-            try {
-              pi.sendUserMessage(
-                buildBackgroundWorkflowFollowUp({
-                  runId,
-                  status: details.status,
-                  result: buildWorkflowResultMessage(details, runDir),
-                }),
-                { deliverAs: "followUp" },
+            const output = buildBackgroundWorkflowFollowUp({
+              runId,
+              status: details.status,
+              result: buildWorkflowResultMessage(details, runDir),
+            });
+            const delivery = offerCompletion(pi.events, {
+              kind: "workflow",
+              id: runId,
+              title: details.name ?? runId,
+              status: details.status === "completed" ? "success" : "failure",
+              output,
+              toolName: "workflow_completion",
+              outputClass: "subagent-final",
+              customType: "workflow-result",
+              details: { runId, status: details.status },
+              externalArtifactReferences: [
+                path.join(runDir, "result.json"),
+                path.join(runDir, "transcripts.json"),
+                path.join(runDir, "workflow.json"),
+              ],
+            });
+            if (!delivery) {
+              pi.sendMessage(
+                {
+                  customType: "workflow-result",
+                  content: output,
+                  display: true,
+                  details: { runId, status: details.status },
+                },
+                details.status === "completed"
+                  ? { deliverAs: "nextTurn", triggerTurn: false }
+                  : { deliverAs: "followUp", triggerTurn: true },
               );
-            } catch {
-              // Session may be shutting down.
             }
           });
         return {

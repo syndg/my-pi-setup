@@ -779,11 +779,16 @@ must not mutate them (same doc comment as manager.ts line 89).
 
 ## 12. Lifecycle: reload / new / resume / fork / shutdown
 
-pi's session replacement flow (docs/extensions.md "Lifecycle Overview" + session_shutdown):
-`/new`, `/resume`, `/fork`, `/reload`, and quit all emit `session_shutdown` (with `event.reason`)
-for the old extension instance, then re-instantiate extensions and emit `session_start`.
-Consequences:
+pi's session replacement flow (docs/extensions.md "Lifecycle Overview" + session_shutdown)
+emits `session_shutdown` for the old session and `session_start` for the newly active session.
+The loaded extension instance may be reused, so lifecycle state must not rely on fresh
+process-local variables. Consequences:
 
+- **Deferred controls are session-derived.** On every `session_start`, scan all entries from
+  the newly active session and replace the activation flag with that result. This restores
+  resumed/reloaded activation (including activation on another branch), while a new/empty
+  session returns to the initial `bg_start`-only policy. `session_tree` updates remain
+  additive within that session and never deactivate controls.
 - **Processes do not survive any session transition.** In `session_shutdown`: clear
   `resultDelivery`, unsubscribe, clear widget, null the ui/context refs, then
   `await closing?.dispose()` — the ManagedRuntime close runs the manager finalizer →
@@ -804,7 +809,8 @@ Consequences:
 - **Do not spawn from stale contexts.** All spawning goes through tool handlers with a live
   `ctx`; the manager rejects `start` when `disposed` (SpawnError "shutting down", subagents
   manager.ts lines 370–374 precedent).
-- **Fork/clone:** nothing special — same shutdown+start pair; the new instance starts empty.
+- **Fork/clone:** nothing special — after the shutdown+start pair, activation is derived from
+  all entries in the newly active tree and the process registry starts empty.
 
 ## 13. Truncation constants (single place, `index.ts` top)
 

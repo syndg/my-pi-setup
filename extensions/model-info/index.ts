@@ -45,7 +45,6 @@ export default function modelInfo(pi: ExtensionAPI) {
   function refresh(ctx: ExtensionContext) {
     currentContext = ctx;
     const model = ctx.model;
-    const usage = ctx.getContextUsage();
 
     state = {
       ...state,
@@ -53,9 +52,6 @@ export default function modelInfo(pi: ExtensionAPI) {
       modelId: model?.id ?? "no-model",
       modelName: model?.name ?? model?.id ?? "No model",
       thinking: model?.reasoning ? pi.getThinkingLevel() : "off",
-      contextTokens: usage?.tokens ?? null,
-      contextWindow: usage?.contextWindow ?? model?.contextWindow ?? 0,
-      contextPercent: usage?.percent ?? null,
       cost: getSessionCost(ctx),
     };
     publish();
@@ -90,7 +86,6 @@ export default function modelInfo(pi: ExtensionAPI) {
       modelId: event.model.id,
       modelName: event.model.name,
       thinking: event.model.reasoning ? pi.getThinkingLevel() : "off",
-      contextWindow: event.model.contextWindow,
     };
     refresh(ctx);
   });

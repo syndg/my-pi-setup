@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
   createReadToolDefinition,
-  type ReadToolDetails,
   type AgentToolResult,
 } from "@earendil-works/pi-coding-agent";
 import { applyLineOperations } from "./operations.ts";
-import { createHashlineReadTool } from "./read-tool.ts";
+import {
+  createHashlineReadTool,
+  type HashlineReadDetails,
+} from "./read-tool.ts";
 import { SnapshotStore } from "./snapshot-store.ts";
 
 async function withDirectory(run: (directory: string) => Promise<void>) {
@@ -32,10 +34,10 @@ async function execute(
     undefined,
     undefined,
     { cwd, model: undefined },
-  ]) as Promise<AgentToolResult<ReadToolDetails | undefined>>;
+  ]) as Promise<AgentToolResult<HashlineReadDetails | undefined>>;
 }
 
-function output(result: AgentToolResult<ReadToolDetails | undefined>) {
+function output(result: AgentToolResult<HashlineReadDetails | undefined>) {
   const part = result.content[0];
   assert.equal(part?.type, "text");
   return part.type === "text" ? part.text : "";
@@ -94,7 +96,8 @@ test("preserves built-in line truncation and continuation notice", () =>
       directory,
     );
 
-    assert.deepEqual(actual.details, baseline.details);
+    assert.deepEqual(actual.details?.truncation, baseline.details?.truncation);
+    assert.ok(actual.details?.fullOutputPath);
     assert.equal(actual.details?.truncation?.outputLines, 2000);
     assert.match(
       output(actual),
@@ -122,12 +125,59 @@ test("preserves byte-truncation notice and exact details", () =>
       execute(createReadToolDefinition(directory), input, directory),
     ]);
 
-    assert.deepEqual(actual.details, baseline.details);
+    assert.deepEqual(actual.details?.truncation, baseline.details?.truncation);
+    assert.ok(actual.details?.fullOutputPath);
     assert.equal(actual.details?.truncation?.truncatedBy, "bytes");
     assert.match(
       output(actual),
-      /50\.0KB limit\)\. Use offset=\d+ to continue\.\]$/,
+      /50\.0KB limit\)\. Use offset=\d+ to continue\.\]/,
     );
+  }));
+
+test("spills exactly the complete selected slice before truncation", () =>
+  withDirectory(async (directory) => {
+    const lines = Array.from(
+      { length: 3_100 },
+      (_, index) => `line-${index + 1}`,
+    );
+    await writeFile(path.join(directory, "slice.txt"), lines.join("\n"));
+    const snapshots = new SnapshotStore();
+    const result = await execute(
+      createHashlineReadTool(directory, snapshots),
+      { path: "slice.txt", offset: 501, limit: 2_500 },
+      directory,
+    );
+    assert.equal(result.details?.truncation?.truncated, true);
+    assert.ok(result.details?.fullOutputPath);
+    assert.equal(
+      await readFile(result.details.fullOutputPath, "utf8"),
+      lines.slice(500, 3_000).join("\n"),
+    );
+    assert.match(output(result), /Complete selected text saved to:/);
+    assert.doesNotMatch(
+      await readFile(result.details.fullOutputPath, "utf8"),
+      /line-500\n/,
+    );
+    const tag = output(result).match(/#([0-9A-F]{16})/)?.[1];
+    assert.ok(tag);
+    const snapshot = snapshots.getForPreview("slice.txt", tag);
+    assert.equal(snapshot?.seenLines.has(2_500), true);
+    assert.equal(snapshot?.seenLines.has(2_501), false);
+  }));
+
+test("spill failure preserves truncation without claiming a saved artifact", () =>
+  withDirectory(async (directory) => {
+    await writeFile(path.join(directory, "fail.txt"), "line\n".repeat(3_000));
+    const result = await execute(
+      createHashlineReadTool(directory, new SnapshotStore(), {
+        persistSelectedText: () => Promise.reject(new Error("disk full")),
+      }),
+      { path: "fail.txt" },
+      directory,
+    );
+    assert.equal(result.details?.truncation?.truncated, true);
+    assert.equal(result.details?.fullOutputPath, undefined);
+    assert.doesNotMatch(output(result), /Complete selected text saved to:/);
   }));
 
 test("does not tag oversized-first-line output", () =>
@@ -139,8 +189,13 @@ test("does not tag oversized-first-line output", () =>
       execute(createHashlineReadTool(directory, snapshots), input, directory),
       execute(createReadToolDefinition(directory), input, directory),
     ]);
-    assert.equal(output(actual), output(baseline));
-    assert.deepEqual(actual.details, baseline.details);
+    assert.ok(output(actual).startsWith(output(baseline)));
+    assert.deepEqual(actual.details?.truncation, baseline.details?.truncation);
+    assert.ok(actual.details?.fullOutputPath);
+    assert.equal(
+      await readFile(actual.details.fullOutputPath, "utf8"),
+      "x".repeat(60 * 1024),
+    );
     assert.equal(snapshots.size, 0);
   }));
 

@@ -9,6 +9,7 @@
 
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { Data } from "effect";
+import type { ChildToolProfile } from "../../shared/child-session.ts";
 
 export const BACKEND_NAMES = ["pi", "claude", "codex"] as const;
 export type BackendName = (typeof BACKEND_NAMES)[number];
@@ -60,6 +61,10 @@ export interface SpawnTask {
   readonly model?: string;
   /** Shared effort scale; each backend maps it to its native equivalent. */
   readonly reasoningEffort?: ReasoningEffort;
+  /** Explicit Pi child schema profile; non-Pi harnesses use their native tool policy. */
+  readonly toolProfile?: ChildToolProfile;
+  /** Final report budget selected from profile and validated parent pressure. */
+  readonly reportBudgetBytes?: number;
   readonly parent: ParentContext;
 }
 
@@ -196,6 +201,8 @@ export interface SubagentSnapshot {
   readonly title: string;
   readonly prompt: string;
   readonly cwd: string;
+  readonly toolProfile?: ChildToolProfile;
+  readonly reportBudgetBytes?: number;
   readonly status: SubagentStatus;
   readonly createdAt: number;
   readonly settledAt?: number;

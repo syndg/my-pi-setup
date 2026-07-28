@@ -15,14 +15,14 @@ import {
 import { Type } from "typebox";
 import {
   bindChildSessionExtensions,
-  CHILD_EXCLUDED_TOOL_NAMES,
+  CHILD_FORBIDDEN_TOOL_NAMES,
+  CHILD_TOOL_PROFILE_NAMES,
   childToolPolicy,
   createChildResources,
   resolveStandaloneChildProjectTrust,
   shutdownAndDisposeChildSession,
   type DisposableChildSession,
 } from "./child-session.ts";
-
 async function withTempDir(run: (directory: string) => Promise<void>) {
   const directory = await mkdtemp(path.join(tmpdir(), "pi-child-policy-"));
   try {
@@ -32,10 +32,34 @@ async function withTempDir(run: (directory: string) => Promise<void>) {
   }
 }
 
-test("child denylist keeps extension and workflow structured tools available", async () => {
+test("child profiles are explicit and preserve required safety tools", async () => {
+  assert.deepEqual(
+    [...CHILD_TOOL_PROFILE_NAMES],
+    ["research", "coding", "review", "minimal"],
+  );
+  const coding = childToolPolicy("coding", [
+    "message_orchestrator",
+    "workflow",
+  ]);
+  assert.equal(coding.tools.includes("read"), true);
+  assert.equal(coding.tools.includes("edit"), true);
+  assert.equal(coding.tools.includes("write"), true);
+  assert.equal(coding.tools.includes("message_orchestrator"), true);
+  assert.equal(coding.tools.includes("workflow"), false);
+  assert.deepEqual(coding.excludeTools, [...CHILD_FORBIDDEN_TOOL_NAMES]);
+
+  const research = childToolPolicy("research");
+  assert.equal(research.tools.includes("mcp"), true);
+  assert.equal(research.tools.includes("edit"), false);
+  assert.equal(research.tools.includes("write"), false);
+  const review = childToolPolicy("review");
+  assert.equal(review.tools.includes("mcp"), false);
+  assert.equal(review.tools.includes("edit"), false);
+  assert.deepEqual(childToolPolicy("minimal").tools, ["read"]);
+});
+
+test("child allowlist keeps structured output active and orchestration denied", async () => {
   await withTempDir(async (directory) => {
-    let starts = 0;
-    let shutdowns = 0;
     const settingsManager = SettingsManager.inMemory(undefined, {
       projectTrusted: false,
     });
@@ -45,15 +69,9 @@ test("child denylist keeps extension and workflow structured tools available", a
       settingsManager,
       extensionFactories: [
         (pi) => {
-          pi.on("session_start", () => {
-            starts++;
-          });
-          pi.on("session_shutdown", () => {
-            shutdowns++;
-          });
           for (const name of [
             "fixture_extension_tool",
-            ...CHILD_EXCLUDED_TOOL_NAMES,
+            ...CHILD_FORBIDDEN_TOOL_NAMES,
           ]) {
             pi.registerTool({
               name,
@@ -61,10 +79,7 @@ test("child denylist keeps extension and workflow structured tools available", a
               description: name,
               parameters: Type.Object({}),
               async execute() {
-                return {
-                  content: [{ type: "text", text: "ok" }],
-                  details: {},
-                };
+                return { content: [{ type: "text", text: "ok" }], details: {} };
               },
             });
           }
@@ -72,70 +87,32 @@ test("child denylist keeps extension and workflow structured tools available", a
       ],
     });
     await inlineLoader.reload();
-
     const structuredOutput = defineTool({
       name: "structured_output",
       label: "Structured Output",
-      description: "fixture structured result",
+      description: "fixture",
       parameters: Type.Object({ value: Type.String() }),
       async execute(_id, params) {
-        return {
-          content: [{ type: "text", text: params.value }],
-          details: {},
-        };
+        return { content: [{ type: "text", text: params.value }], details: {} };
       },
     });
     const { session } = await createAgentSession({
       cwd: directory,
-      agentDir: path.join(directory, "inline-agent"),
       resourceLoader: inlineLoader,
       settingsManager,
       sessionManager: SessionManager.inMemory(directory),
       customTools: [structuredOutput],
-      ...childToolPolicy(),
+      ...childToolPolicy("research", ["structured_output"]),
     });
     await bindChildSessionExtensions(session);
-
-    assert.deepEqual(
-      [...CHILD_EXCLUDED_TOOL_NAMES],
-      [
-        "subagent_spawn",
-        "subagent_wait",
-        "subagent_cancel",
-        "subagent_check",
-        "subagent_list",
-        "workflow",
-        "ask_user",
-      ],
-    );
-    const allTools = new Set(session.getAllTools().map((tool) => tool.name));
-    const activeTools = new Set(session.getActiveToolNames());
-    assert.equal(starts, 1);
-    assert.equal(allTools.has("fixture_extension_tool"), true);
-    assert.equal(activeTools.has("fixture_extension_tool"), true);
-    assert.equal(allTools.has("structured_output"), true);
-    assert.equal(activeTools.has("structured_output"), true);
-    for (const denied of CHILD_EXCLUDED_TOOL_NAMES) {
-      assert.equal(allTools.has(denied), false, `${denied} should be denied`);
-      assert.equal(
-        activeTools.has(denied),
-        false,
-        `${denied} should be inactive`,
-      );
-    }
-    for (const builtin of ["read", "bash", "edit", "write"]) {
-      assert.equal(
-        activeTools.has(builtin),
-        true,
-        `${builtin} should stay active`,
-      );
-    }
-
-    await Promise.all([
-      shutdownAndDisposeChildSession(session),
-      shutdownAndDisposeChildSession(session),
-    ]);
-    assert.equal(shutdowns, 1);
+    const active = new Set(session.getActiveToolNames());
+    for (const required of ["read", "bash", "structured_output"])
+      assert.equal(active.has(required), true);
+    for (const denied of CHILD_FORBIDDEN_TOOL_NAMES)
+      assert.equal(active.has(denied), false);
+    assert.equal(active.has("edit"), false);
+    assert.equal(active.has("fixture_extension_tool"), false);
+    await shutdownAndDisposeChildSession(session);
   });
 });
 

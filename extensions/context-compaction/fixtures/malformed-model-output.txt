@@ -1,0 +1,3 @@
+```json
+{"schemaVersion":"context-checkpoint/v1","goal":"decorated output is invalid"}
+```

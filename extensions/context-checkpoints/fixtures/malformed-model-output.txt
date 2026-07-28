@@ -1,0 +1,4 @@
+```json
+{"schemaVersion":"context-checkpoint/v1","goal":"Continue work","nextActions":["Keep going"]}
+```
+Additional prose that is not part of a checkpoint.

@@ -13,6 +13,7 @@ export const SUBAGENT_SPAWN_PROMPT_GUIDELINES = [
   "Use subagent_spawn to delegate self-contained tasks that can run in the background; give it a complete, standalone prompt.",
   "Pick the subagent harness deliberately: pi unless you have a reason to prefer Claude Code or Codex (e.g. the user asked for one, or the task suits that harness).",
   "After subagent_spawn, keep working; results arrive automatically. Only call subagent_wait when you cannot proceed without the result.",
+  "At Yellow+ context pressure, prefer narrowly scoped delegation and choose the least-privilege research, coding, review, or minimal profile; delegation remains optional and is never automatic.",
 ];
 
 /** Model-facing schema descriptions for subagent_spawn task and execution options. */
@@ -28,6 +29,8 @@ export const SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS = {
     'Model hint, interpreted by the chosen harness (pi: "provider/model-id" or model id; claude: model alias like "sonnet"/"opus"; codex: model slug). Omit for the harness default (pi inherits the current model).',
   reasoningEffort:
     "Reasoning effort on a shared scale; the harness maps it to its nearest native equivalent (pi thinking level, codex reasoning effort, claude thinking budget). Omit for the harness default (pi inherits the current level).",
+  profile:
+    'Execution profile: "coding" (default), "research", "review", or "minimal". Pi enforces the matching tool-schema allowlist. Claude Code and Codex retain native tool policies and use the profile as scoped execution guidance. Every profile selects an explicit pressure-aware final-report budget.',
 };
 
 /** Builds the subagent_spawn result that tells the parent model how to continue or inspect the child. */

@@ -7,9 +7,6 @@ export interface ModelInfoState {
   modelId: string;
   modelName: string;
   thinking: string;
-  contextTokens: number | null;
-  contextWindow: number;
-  contextPercent: number | null;
   cost: number;
   tokensPerSecond: number | null;
   generating: boolean;
@@ -34,9 +31,6 @@ export function emptyModelInfoState(): ModelInfoState {
     modelId: "no-model",
     modelName: "No model",
     thinking: "off",
-    contextTokens: null,
-    contextWindow: 0,
-    contextPercent: null,
     cost: 0,
     tokensPerSecond: null,
     generating: false,
@@ -68,9 +62,6 @@ export function isModelInfoState(value: unknown): value is ModelInfoState {
     typeof value.modelId === "string" &&
     typeof value.modelName === "string" &&
     typeof value.thinking === "string" &&
-    isNullableNumber(value.contextTokens) &&
-    typeof value.contextWindow === "number" &&
-    isNullableNumber(value.contextPercent) &&
     typeof value.cost === "number" &&
     isNullableNumber(value.tokensPerSecond) &&
     typeof value.generating === "boolean"

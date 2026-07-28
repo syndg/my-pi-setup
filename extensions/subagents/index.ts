@@ -55,7 +55,12 @@ import {
   formatContextUtilization,
 } from "./src/format.ts";
 import { SubagentManager, type SubagentManagerShape } from "./src/manager.ts";
-import type { ChildToParentMessage } from "./src/messaging.ts";
+import {
+  boundedLiveMessage,
+  liveMessageBudgetBytes,
+  shouldWakeForChildMessage,
+  type ChildToParentMessage,
+} from "./src/messaging.ts";
 import {
   buildSubagentResultMessage,
   buildSubagentSpawnResult,
@@ -81,6 +86,23 @@ import {
   type SubagentRuntime,
 } from "./src/runtime.ts";
 import { openSubagentPicker, openSubagentTakeover } from "./src/ui/takeover.ts";
+import {
+  activateSubagentTools,
+  branchHasActivation,
+  initializeSubagentTools,
+} from "./src/tool-activation.ts";
+import { CHILD_TOOL_PROFILE_NAMES } from "../shared/child-session.ts";
+import {
+  CONTEXT_GOVERNOR_CHANNEL,
+  isGovernorState,
+  type GovernorState,
+} from "../shared/context-governor-state.ts";
+import { offerCompletion } from "../context-output/src/completion.ts";
+import {
+  buildDelegatedChildPrompt,
+  delegatedArtifactReferences,
+  resolveDelegationPolicy,
+} from "./src/delegation.ts";
 
 const SUBAGENT_OUTPUT_MAX_BYTES = 24 * 1024;
 const WAIT_OUTPUT_MAX_BYTES = 48 * 1024;
@@ -108,18 +130,24 @@ function describeSubagent(snap: SubagentSnapshot) {
 
 function truncatedOutput(
   snap: SubagentSnapshot,
-  maxBytes = SUBAGENT_OUTPUT_MAX_BYTES,
+  maxBytes = snap.reportBudgetBytes ?? SUBAGENT_OUTPUT_MAX_BYTES,
 ): string {
   const output = snap.finalText || "(no output)";
+  const limit = Math.min(maxBytes, DEFAULT_MAX_BYTES);
+  const marker = `\n\n[Additional child output omitted. Full transcript artifact: ${snap.meta.sessionFilePath ?? "unavailable"}]`;
+  const markerBytes = Buffer.byteLength(marker, "utf8");
   const truncation = truncateHead(output, {
-    maxBytes: Math.min(maxBytes, DEFAULT_MAX_BYTES),
+    maxBytes: Math.max(1, limit - Math.min(markerBytes, Math.floor(limit / 2))),
     maxLines: Math.min(600, DEFAULT_MAX_LINES),
   });
-  let text = truncation.content;
-  if (truncation.truncated) {
-    text += `\n\n[Output truncated: ${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)} shown. Full transcript in session file: ${snap.meta.sessionFilePath ?? "?"}]`;
+  if (!truncation.truncated && Buffer.byteLength(output, "utf8") <= limit) {
+    return output;
   }
-  return text;
+  const bounded = truncateHead(`${truncation.content}${marker}`, {
+    maxBytes: limit,
+    maxLines: Math.min(600, DEFAULT_MAX_LINES),
+  });
+  return bounded.content;
 }
 
 /**
@@ -146,10 +174,16 @@ function resolveChildProjectTrust(options: {
 export default function (pi: ExtensionAPI) {
   let runtime: SubagentRuntime | undefined;
   let managerPromise: Promise<SubagentManagerShape> | undefined;
+  let managerState: SubagentManagerShape | undefined;
   let sessionContext: ExtensionContext | undefined;
   let ui: ExtensionUIContext | undefined;
   let unsubStatus: (() => void) | undefined;
   const resultDelivery = createDeferredResultDelivery<SubagentSnapshot>();
+  let latestGovernor: GovernorState | undefined;
+  let toolsActivated = false;
+  const stopGovernor = pi.events.on(CONTEXT_GOVERNOR_CHANNEL, (value) => {
+    if (isGovernorState(value)) latestGovernor = value;
+  });
 
   const getRuntime = () => (runtime ??= createSubagentRuntime());
 
@@ -158,6 +192,7 @@ export default function (pi: ExtensionAPI) {
     managerPromise ??= getRuntime()
       .runPromise(SubagentManager)
       .then((manager) => {
+        managerState = manager;
         manager.view.setOnSettled(onSettled);
         manager.view.setOnMessage(onChildMessage);
         unsubStatus?.();
@@ -186,17 +221,30 @@ export default function (pi: ExtensionAPI) {
 
   const onChildMessage = (message: ChildToParentMessage) => {
     const reply = message.replyTo ? ` in reply to ${message.replyTo}` : "";
+    const child = managerState?.view.get(message.subagentId);
+    const policy = resolveDelegationPolicy({
+      governorState: latestGovernor,
+      sessionId: sessionContext?.sessionManager.getSessionId() ?? "",
+      requestedProfile: child?.toolProfile,
+    });
+    const budget = liveMessageBudgetBytes(
+      child?.reportBudgetBytes,
+      policy.outputBudgetBytes,
+    );
+    const wake = shouldWakeForChildMessage(message);
     try {
       pi.sendMessage(
         {
           customType: "subagent-message",
           content:
             `Subagent ${message.subagentId} "${message.title}" sent message ${message.id}${reply}:\n\n` +
-            message.message,
+            boundedLiveMessage(message.message, budget),
           display: true,
           details: message,
         },
-        { deliverAs: "steer", triggerTurn: true },
+        wake
+          ? { deliverAs: "followUp", triggerTurn: true }
+          : { deliverAs: "nextTurn", triggerTurn: false },
       );
       return true;
     } catch {
@@ -206,20 +254,43 @@ export default function (pi: ExtensionAPI) {
   };
 
   const deliverResult = (snap: SubagentSnapshot) => {
+    const output = buildSubagentResultMessage({
+      id: snap.id,
+      title: snap.title,
+      status: snap.status,
+      errorText: snap.errorText,
+      output: truncatedOutput(snap),
+    });
+    const delivery = offerCompletion(pi.events, {
+      kind: "subagent",
+      id: snap.id,
+      title: snap.title,
+      status: snap.status === "error" ? "failure" : "success",
+      output,
+      toolName: "subagent_completion",
+      outputClass: "subagent-final",
+      customType: "subagent-result",
+      details: { id: snap.id, title: snap.title, status: snap.status },
+      externalArtifactReferences: delegatedArtifactReferences(
+        snap.meta.sessionFilePath,
+      ),
+    });
+    if (delivery) {
+      void delivery.then((outcome) => {
+        if (!outcome.delivered && sessionContext) resultDelivery.defer(snap);
+      });
+      return;
+    }
     pi.sendMessage(
       {
         customType: "subagent-result",
-        content: buildSubagentResultMessage({
-          id: snap.id,
-          title: snap.title,
-          status: snap.status,
-          errorText: snap.errorText,
-          output: truncatedOutput(snap),
-        }),
+        content: output,
         display: true,
         details: { id: snap.id, title: snap.title, status: snap.status },
       },
-      { deliverAs: "followUp", triggerTurn: true },
+      snap.status === "error"
+        ? { deliverAs: "followUp", triggerTurn: true }
+        : { deliverAs: "nextTurn", triggerTurn: false },
     );
   };
 
@@ -268,9 +339,24 @@ export default function (pi: ExtensionAPI) {
     if (sessionContext?.isIdle()) flushResults();
   };
 
+  const initializeSessionToolActivation = (ctx: ExtensionContext) => {
+    toolsActivated = branchHasActivation(ctx.sessionManager.getEntries());
+    initializeSubagentTools(pi, toolsActivated);
+  };
+
+  const syncTreeToolActivation = (ctx: ExtensionContext) => {
+    toolsActivated ||= branchHasActivation(ctx.sessionManager.getEntries());
+    initializeSubagentTools(pi, toolsActivated);
+  };
+
   pi.on("session_start", (_event, ctx) => {
     sessionContext = ctx;
     if (ctx.hasUI) ui = ctx.ui;
+    initializeSessionToolActivation(ctx);
+  });
+
+  pi.on("session_tree", (_event, ctx) => {
+    syncTreeToolActivation(ctx);
   });
 
   pi.on("agent_settled", flushResults);
@@ -278,6 +364,8 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", async () => {
     sessionContext = undefined;
     resultDelivery.clear();
+    latestGovernor = undefined;
+    stopGovernor();
     unsubStatus?.();
     unsubStatus = undefined;
     ui?.setStatus("subagents", undefined);
@@ -285,6 +373,7 @@ export default function (pi: ExtensionAPI) {
     const closing = runtime;
     runtime = undefined;
     managerPromise = undefined;
+    managerState = undefined;
     // Disposing the runtime runs the manager finalizer, which tears down all
     // subagent scopes (and, later, their real child processes).
     await closing?.dispose();
@@ -323,6 +412,11 @@ export default function (pi: ExtensionAPI) {
           description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.reasoningEffort,
         }),
       ),
+      profile: Type.Optional(
+        StringEnum(CHILD_TOOL_PROFILE_NAMES, {
+          description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.profile,
+        }),
+      ),
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const manager = await getManager();
@@ -334,14 +428,26 @@ export default function (pi: ExtensionAPI) {
       }
 
       const title = params.name.trim().slice(0, 160) || "subagent";
+      const policy = resolveDelegationPolicy({
+        governorState: latestGovernor,
+        sessionId: ctx.sessionManager.getSessionId(),
+        requestedProfile: params.profile,
+      });
+      const childPrompt = buildDelegatedChildPrompt({
+        prompt: params.prompt,
+        harness,
+        policy,
+      });
       const snap = await runTool(
         getRuntime(),
         manager.spawn(harness, {
-          prompt: params.prompt,
+          prompt: childPrompt,
           title,
           cwd,
           model: params.model,
           reasoningEffort: params.reasoning_effort,
+          toolProfile: policy.profile,
+          reportBudgetBytes: policy.outputBudgetBytes,
           parent: {
             parentCwd: ctx.cwd,
             projectTrusted: resolveChildProjectTrust({
@@ -358,6 +464,8 @@ export default function (pi: ExtensionAPI) {
         }),
         { signal, interruptMessage: "Subagent spawn aborted." },
       );
+      toolsActivated = true;
+      activateSubagentTools(pi);
 
       return {
         content: [
@@ -378,6 +486,9 @@ export default function (pi: ExtensionAPI) {
           cwd,
           harness,
           model: snap.meta.modelLabel,
+          profile: policy.profile,
+          outputBudgetBytes: policy.outputBudgetBytes,
+          governorState: policy.stateDisposition,
         },
       };
     },
@@ -443,7 +554,11 @@ export default function (pi: ExtensionAPI) {
         const headerBytes = Buffer.byteLength(section, "utf8") + 2;
         const outputBudget = Math.max(
           512,
-          Math.min(WAIT_PER_AGENT_MAX_BYTES, remainingBytes - headerBytes),
+          Math.min(
+            snap.reportBudgetBytes ?? WAIT_PER_AGENT_MAX_BYTES,
+            WAIT_PER_AGENT_MAX_BYTES,
+            remainingBytes - headerBytes,
+          ),
         );
         section += `\n\n${truncatedOutput(snap, outputBudget)}`;
         const sectionBytes = Buffer.byteLength(section, "utf8");

@@ -1,4 +1,5 @@
 import { dirname, join } from "node:path";
+import { TextDecoder } from "node:util";
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,

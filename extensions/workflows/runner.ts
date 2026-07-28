@@ -452,7 +452,7 @@ export async function runAgent(
       settingsManager: options.settingsManager,
       sessionManager: SessionManager.inMemory(options.cwd),
       ...(customTools ? { customTools } : {}),
-      ...childToolPolicy(),
+      ...childToolPolicy("coding", customTools?.map((tool) => tool.name) ?? []),
     }));
     await bindChildSessionExtensions(session);
     unsubscribeToolTimeout = guardWorkflowChildTools(

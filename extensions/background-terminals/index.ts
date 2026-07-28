@@ -54,6 +54,12 @@ import {
 } from "./src/runtime.ts";
 import { sanitizeText } from "./src/ui/output-view.ts";
 import { openTerminalPicker } from "./src/ui/ps.ts";
+import {
+  activateBgTools,
+  branchHasBgActivation,
+  initializeBgTools,
+} from "./src/tool-activation.ts";
+import { offerCompletion } from "../context-output/src/completion.ts";
 
 const WIDGET_KEY = "background-terminals";
 
@@ -64,6 +70,7 @@ export default function (pi: ExtensionAPI) {
   let ui: ExtensionUIContext | undefined;
   let unsubStatus: (() => void) | undefined;
   const resultDelivery = createDeferredResultDelivery<TerminalSnapshot>();
+  let toolsActivated = false;
 
   const getRuntime = () => (runtime ??= createTerminalRuntime());
 
@@ -118,10 +125,43 @@ export default function (pi: ExtensionAPI) {
 
   const deliverResult = (snap: TerminalSnapshot) => {
     try {
+      const output = buildTerminalResultMessage(snap);
+      const references = [snap.stdout.spillPath, snap.stderr.spillPath].filter(
+        (value): value is string => value !== undefined,
+      );
+      const delivery = offerCompletion(pi.events, {
+        kind: "background-terminal",
+        id: snap.id,
+        title: snap.title,
+        status:
+          snap.status === "failed"
+            ? "failure"
+            : snap.status === "killed"
+              ? "killed"
+              : "success",
+        output,
+        toolName: "background_terminal_completion",
+        outputClass: "background-completion",
+        customType: "background-terminal-result",
+        details: {
+          id: snap.id,
+          title: snap.title,
+          status: snap.status,
+          exitCode: snap.exitCode ?? null,
+          signal: snap.signal ?? null,
+        },
+        externalArtifactReferences: references,
+      });
+      if (delivery) {
+        void delivery.then((outcome) => {
+          if (!outcome.delivered && sessionContext) resultDelivery.defer(snap);
+        });
+        return true;
+      }
       pi.sendMessage(
         {
           customType: "background-terminal-result",
-          content: buildTerminalResultMessage(snap),
+          content: output,
           display: true,
           details: {
             id: snap.id,
@@ -131,16 +171,12 @@ export default function (pi: ExtensionAPI) {
             signal: snap.signal,
           },
         },
-        // followUp: queued until the agent has no more tool calls — never
-        // interrupts a mid-turn stream. triggerTurn: wakes the model
-        // immediately iff idle; if busy, the queued follow-up is delivered
-        // when the current run settles. Either way exactly one delivery.
-        { deliverAs: "followUp", triggerTurn: true },
+        snap.status === "failed"
+          ? { deliverAs: "followUp", triggerTurn: true }
+          : { deliverAs: "nextTurn", triggerTurn: false },
       );
       return true;
     } catch (error) {
-      // Session may be shutting down, but retain the snapshot so any later
-      // agent-settled flush can retry instead of silently dropping it.
       console.error("background-terminals: failed to deliver result", error);
       return false;
     }
@@ -168,9 +204,24 @@ export default function (pi: ExtensionAPI) {
     if (sessionContext?.isIdle()) flushResults();
   };
 
+  const initializeSessionToolActivation = (ctx: ExtensionContext) => {
+    toolsActivated = branchHasBgActivation(ctx.sessionManager.getEntries());
+    initializeBgTools(pi, toolsActivated);
+  };
+
+  const syncTreeToolActivation = (ctx: ExtensionContext) => {
+    toolsActivated ||= branchHasBgActivation(ctx.sessionManager.getEntries());
+    initializeBgTools(pi, toolsActivated);
+  };
+
   pi.on("session_start", (_event, ctx) => {
     sessionContext = ctx;
     if (ctx.hasUI) ui = ctx.ui;
+    initializeSessionToolActivation(ctx);
+  });
+
+  pi.on("session_tree", (_event, ctx) => {
+    syncTreeToolActivation(ctx);
   });
 
   // Drain deferred results when the agent settles: together with the
@@ -178,11 +229,11 @@ export default function (pi: ExtensionAPI) {
   // double delivery is structurally impossible — whoever drains first wins.
   pi.on("agent_settled", flushResults);
 
-  // /new, /resume, /fork, /reload, and quit all emit session_shutdown for
-  // the old extension instance. Processes never survive a session
-  // transition: disposing the runtime runs the manager finalizer →
-  // disposeAll → every entry scope → SIGTERM→SIGKILL tree kill, each close
-  // bounded so a wedged process cannot hang shutdown.
+  // Session transitions can reuse this extension instance. Processes still
+  // never survive a transition: session_shutdown disposes the runtime, whose
+  // manager finalizer runs disposeAll → every entry scope → SIGTERM→SIGKILL
+  // tree kill, with each close bounded so a wedged process cannot hang
+  // shutdown.
   pi.on("session_shutdown", async () => {
     sessionContext = undefined;
     resultDelivery.clear();
@@ -241,6 +292,8 @@ export default function (pi: ExtensionAPI) {
         getRuntime(),
         manager.start({ command, title, cwd }),
       );
+      toolsActivated = true;
+      activateBgTools(pi);
 
       return {
         content: [{ type: "text", text: buildStartResult(snap) }],
