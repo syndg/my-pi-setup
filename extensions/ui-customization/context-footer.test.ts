@@ -69,7 +69,7 @@ test("renders the full compact target from one governor state", () => {
   );
 });
 
-test("labels estimated and unknown values explicitly", () => {
+test("labels estimated values and omits unavailable forecast metrics", () => {
   assert.equal(
     textAt(stateWith({ source: "message-estimate" }), 100),
     "est 157k/272k · safe 190k · +31k · ~1.1 runs · orange",
@@ -85,7 +85,16 @@ test("labels estimated and unknown values explicitly", () => {
   });
   assert.equal(
     textAt(unknown, 120),
-    "unknown/272k · safe unknown · growth unknown · runway unknown · pressure unknown",
+    "unknown/272k · safe unknown · pressure unknown",
+  );
+
+  assert.equal(
+    textAt(stateWith({ latestGrowth: null, runway: 2.5 }), 100),
+    "157k/272k · safe 190k · ~2.5 runs · orange",
+  );
+  assert.equal(
+    textAt(stateWith({ latestGrowth: 775, runway: null }), 100),
+    "157k/272k · safe 190k · +775 · orange",
   );
 });
 

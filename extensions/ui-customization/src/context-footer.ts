@@ -93,7 +93,7 @@ function safeLimitMetric(state: Readonly<GovernorState>) {
 
 function growthMetric(state: Readonly<GovernorState>) {
   const latest = finite(state.growth.latestTokens);
-  if (latest === undefined) return metric("growth", "growth unknown");
+  if (latest === undefined) return undefined;
 
   const formatted = formatCompactTokens(latest);
   return metric("growth", latest >= 0 ? `+${formatted}` : formatted);
@@ -101,7 +101,7 @@ function growthMetric(state: Readonly<GovernorState>) {
 
 function runwayMetric(state: Readonly<GovernorState>, compact: boolean) {
   const runway = finite(state.runwayRuns);
-  if (runway === undefined) return metric("runway", "runway unknown");
+  if (runway === undefined) return undefined;
   if (runway <= 0) return metric("runway", "runway exhausted");
   return metric("runway", `~${runway.toFixed(1)}${compact ? "r" : " runs"}`);
 }
@@ -162,12 +162,19 @@ export function formatContextFooter(
   const pressure = pressureMetric(state.pressure.level, true);
   const compactPressure = pressureMetric(state.pressure.level, false);
 
+  const forecast = [growth, runway].filter(
+    (item): item is Metric => item !== undefined,
+  );
+  const compactForecast = [growth, compactRunway].filter(
+    (item): item is Metric => item !== undefined,
+  );
+  const compactRunwayOnly = compactRunway ? [compactRunway] : [];
   const candidates = [
-    [measurement, safeLimit, growth, runway, pressure],
-    [measurement, growth, runway, compactPressure],
-    [measurement, growth, compactRunway, compactPressure],
+    [measurement, safeLimit, ...forecast, pressure],
+    [measurement, ...forecast, compactPressure],
+    [measurement, ...compactForecast, compactPressure],
     [measurement, safeLimit, compactPressure],
-    [measurement, compactRunway, compactPressure],
+    [measurement, ...compactRunwayOnly, compactPressure],
     [measurement, compactPressure],
     [measurement],
     [compactPressure],
