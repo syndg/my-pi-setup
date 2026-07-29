@@ -83,7 +83,7 @@ export interface BudgetResolutionInput {
   readonly advisorySafePercent?: number;
 }
 
-/** Mirrors native threshold precedence, then applies the independent advisory cap. */
+/** Mirrors the active native threshold; advisory percentage is fallback-only. */
 export function resolveBudget(input: BudgetResolutionInput): ResolvedBudget {
   const contextWindow = input.contextWindow;
   const validWindow =
@@ -180,8 +180,8 @@ export function resolveBudget(input: BudgetResolutionInput): ResolvedBudget {
     nativeSource,
     nativeProactiveEnabled,
     advisoryLimitTokens,
-    effectiveSafeLimitTokens: Math.min(advisoryLimitTokens, nativeLimitTokens),
-    effectiveSource: "minimum-of-governor-and-native",
+    effectiveSafeLimitTokens: nativeLimitTokens,
+    effectiveSource: "native-limit",
   };
 }
 

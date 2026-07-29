@@ -8,7 +8,7 @@ The extension tracks:
 
 - current context usage and measurement provenance;
 - the active runtime-resolved native compaction threshold/provenance when available, with settings-file fallback for older Pi distributions;
-- an independent advisory safe limit;
+- a fallback advisory limit used only when native proactive compaction is disabled or unavailable;
 - latest and EWMA run growth, plus P95 after enough clean samples;
 - projected similar runs remaining, with Orange/Red runway escalation gated on enough clean samples;
 - pressure level and reasons;

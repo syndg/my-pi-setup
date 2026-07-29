@@ -33,8 +33,8 @@ test("resolves percentage, reserve, disabled, nullable, and unavailable native b
       nativeSource: "threshold-percent",
       nativeProactiveEnabled: true,
       advisoryLimitTokens: 70_000,
-      effectiveSafeLimitTokens: 70_000,
-      effectiveSource: "minimum-of-governor-and-native",
+      effectiveSafeLimitTokens: 80_000,
+      effectiveSource: "native-limit",
     },
   );
 
