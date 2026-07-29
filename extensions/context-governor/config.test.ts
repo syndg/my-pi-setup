@@ -27,7 +27,7 @@ test("documents the complete defensive defaults", () => {
     redSafeLimitRatio: 0.95,
     emergencyMarginTokens: 8_192,
     recoveryRuns: 2,
-    notice: { enabled: true, maxCharacters: 320 },
+    notice: { enabled: false, maxCharacters: 320 },
     footer: { enabled: true, mode: "compact" },
     telemetry: { enabled: true, maxRecords: 200, maxBytes: 524_288 },
   });
@@ -122,7 +122,7 @@ test("falls back per field without discarding valid neighbors", () => {
   assert.equal(parsed.redSafeLimitRatio, 0.9);
   assert.equal(parsed.emergencyMarginTokens, 8_192);
   assert.equal(parsed.recoveryRuns, 2);
-  assert.deepEqual(parsed.notice, { enabled: true, maxCharacters: 320 });
+  assert.deepEqual(parsed.notice, { enabled: false, maxCharacters: 320 });
   assert.deepEqual(parsed.footer, { enabled: false, mode: "compact" });
   assert.deepEqual(parsed.telemetry, {
     enabled: false,

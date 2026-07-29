@@ -1,13 +1,12 @@
 # Context Handoff
 
-Phase 5B adapter over `context-checkpoints`: deterministic checkpoint persistence and explicit fresh-session handoff.
+Phase 5B adapter over `context-checkpoints`: deterministic state persistence inside an explicit fresh-session handoff. The checkpoint format is an internal implementation detail rather than a separate user workflow.
 
-## Commands
+## Command
 
-- `/checkpoint <exact next action>` derives a strict checkpoint from the active branch, up to eight recent `summary-recap` entries, tool/file/test evidence, artifact references, and the published governor snapshot. It never trusts hidden model output; the local deterministic path is the implementation.
-- `/handoff <exact next action>` waits for idle, blocks on active/uncertain child or background work, confirms in UI, validates and atomically prewrites the checkpoint and recovery manifest, appends a non-context checkpoint entry, then calls `ctx.newSession({ parentSession, setup })`. Setup adds a non-context seed plus one bounded context bootstrap. It does not call `sendUserMessage`, set editor text, or auto-run a turn.
+- `/handoff <exact next action>` waits for idle, blocks on active/uncertain child or background work, confirms in UI, validates and atomically prewrites an internal continuation snapshot and recovery manifest, appends a non-context marker, then calls `ctx.newSession({ parentSession, setup })`. Setup adds a non-context seed plus one bounded context bootstrap. It does not call `sendUserMessage`, set editor text, or auto-run a turn.
 
-Pressure events only recommend `/checkpoint`; they never checkpoint or hand off automatically.
+There is intentionally no standalone `/checkpoint` command or pressure recommendation. A handoff creates the snapshot it needs automatically; native compaction does not consume standalone checkpoints.
 
 Artifacts live under `~/.pi/agent/context-handoff/` (or the configured agent directory), mode `0600`, with atomic temp-file + rename + directory sync commits.
 

@@ -25,7 +25,7 @@ export const DEFAULT_CONTEXT_MAINTENANCE_CONFIG: ContextMaintenanceConfig =
   Object.freeze({
     choices: Object.freeze({
       decay: true,
-      checkpoint: true,
+      checkpoint: false,
       handoff: true,
       compact: true,
       "ignore-once": true,
@@ -86,8 +86,8 @@ export function parseContextMaintenanceConfig(
   return Object.freeze({
     choices: Object.freeze({
       decay: typeof choices.decay === "boolean" ? choices.decay : true,
-      checkpoint:
-        typeof choices.checkpoint === "boolean" ? choices.checkpoint : true,
+      // Standalone checkpoints are intentionally not part of the user workflow.
+      checkpoint: false,
       handoff: typeof choices.handoff === "boolean" ? choices.handoff : true,
       compact: typeof choices.compact === "boolean" ? choices.compact : true,
       "ignore-once":

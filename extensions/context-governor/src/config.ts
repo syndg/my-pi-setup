@@ -49,7 +49,7 @@ export const DEFAULT_GOVERNOR_CONFIG: GovernorConfig = Object.freeze({
   redSafeLimitRatio: 0.95,
   emergencyMarginTokens: 8_192,
   recoveryRuns: 2,
-  notice: Object.freeze({ enabled: true, maxCharacters: 320 }),
+  notice: Object.freeze({ enabled: false, maxCharacters: 320 }),
   footer: Object.freeze({ enabled: true, mode: "compact" }),
   telemetry: Object.freeze({
     enabled: true,
@@ -186,10 +186,9 @@ export function parseGovernorConfig(value: unknown): GovernorConfig {
       DEFAULT_GOVERNOR_CONFIG.recoveryRuns,
     ),
     notice: {
-      enabled: booleanOr(
-        notice.enabled,
-        DEFAULT_GOVERNOR_CONFIG.notice.enabled,
-      ),
+      // Request-time pressure instructions are intentionally retired; the
+      // footer and /context-status remain sufficient observability.
+      enabled: false,
       maxCharacters: positiveInteger(
         notice.maxCharacters,
         DEFAULT_GOVERNOR_CONFIG.notice.maxCharacters,

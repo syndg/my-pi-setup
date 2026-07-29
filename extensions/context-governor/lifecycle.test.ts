@@ -139,8 +139,12 @@ test("measurement rejects stale model usage and estimates the active message pay
   assert.ok(measurement.tokens !== null && measurement.tokens < 100);
 });
 
-test("notice appends to a new array only at Yellow+ and tool bytes count once", () => {
-  const governor = createContextGovernor(DEFAULT_GOVERNOR_CONFIG);
+test("notice helper remains opt-in and tool bytes count once", () => {
+  const noticeConfig = {
+    ...DEFAULT_GOVERNOR_CONFIG,
+    notice: { ...DEFAULT_GOVERNOR_CONFIG.notice, enabled: true },
+  };
+  const governor = createContextGovernor(noticeConfig);
   const budget = resolveBudget({
     contextWindow: 100_000,
     nativeProactiveEnabled: true,
@@ -164,12 +168,7 @@ test("notice appends to a new array only at Yellow+ and tool bytes count once", 
   const original: AgentMessage[] = [
     { role: "user", content: "hello", timestamp: 1 },
   ];
-  const outgoing = appendContextNotice(
-    original,
-    state,
-    DEFAULT_GOVERNOR_CONFIG,
-    2,
-  );
+  const outgoing = appendContextNotice(original, state, noticeConfig, 2);
 
   assert.ok(outgoing);
   assert.notEqual(outgoing, original);
@@ -181,14 +180,13 @@ test("notice appends to a new array only at Yellow+ and tool bytes count once", 
   }
   assert.ok(
     outgoing[1]?.role !== "custom" ||
-      outgoing[1].content.length <=
-        DEFAULT_GOVERNOR_CONFIG.notice.maxCharacters,
+      outgoing[1].content.length <= noticeConfig.notice.maxCharacters,
   );
   assert.equal(
     appendContextNotice(
       original,
       { ...state, pressure: { level: "green", reasons: [] } },
-      DEFAULT_GOVERNOR_CONFIG,
+      noticeConfig,
       2,
     ),
     null,
@@ -197,7 +195,7 @@ test("notice appends to a new array only at Yellow+ and tool bytes count once", 
     appendContextNotice(
       original,
       { ...state, pressure: { level: null, reasons: [] } },
-      DEFAULT_GOVERNOR_CONFIG,
+      noticeConfig,
       2,
     ),
     null,
@@ -288,8 +286,8 @@ test("adapter keeps one umbrella run through overflow retry and never persists n
         context,
       ),
     );
-    assert.equal(firstContext?.length, 2);
-    assert.equal(secondContext?.length, 2);
+    assert.equal(firstContext, undefined);
+    assert.equal(secondContext, undefined);
     assert.equal(inputMessages.length, 1);
 
     usageTokens = 62_000;

@@ -63,26 +63,14 @@ export default function contextHandoffExtension(pi: ExtensionAPI) {
     createAtomicCheckpointStore(join(getAgentDir(), "context-handoff")),
   );
   let governor: GovernorState | undefined;
-  let lastRecommended: string | null = null;
 
   const stopGovernor = pi.events.on(CONTEXT_GOVERNOR_CHANNEL, (value) => {
-    if (!isGovernorState(value)) return;
-    governor = value;
-    const level = value.pressure.level;
-    if (
-      (level === "orange" || level === "red" || level === "emergency") &&
-      level !== lastRecommended
-    ) {
-      lastRecommended = level;
-      // Recommendation only: never create a checkpoint or session from pressure.
-      // Notifications are emitted from lifecycle hooks below where a current UI exists.
-    }
+    if (isGovernorState(value)) governor = value;
   });
 
   pi.on("session_start", (_event, ctx) => {
     tracker.reset();
     governor = undefined;
-    lastRecommended = null;
     for (const entry of ctx.sessionManager.getBranch().slice(-100)) {
       if (entry.type === "message" && entry.message.role === "toolResult")
         tracker.observeResult(entry.message.toolName, entry.message.details);
@@ -95,15 +83,6 @@ export default function contextHandoffExtension(pi: ExtensionAPI) {
   pi.on("tool_result", (event) =>
     tracker.observeResult(event.toolName, event.details),
   );
-  pi.on("agent_settled", (_event, ctx) => {
-    const level = governor?.pressure.level;
-    if (level === "orange" || level === "red" || level === "emergency") {
-      ctx.ui.notify(
-        `Context pressure is ${level}. Recommend /checkpoint <exact next action>; /handoff remains explicit.`,
-        "warning",
-      );
-    }
-  });
   pi.on("session_shutdown", () => {
     stopGovernor();
     tracker.reset();
@@ -129,28 +108,6 @@ export default function contextHandoffExtension(pi: ExtensionAPI) {
         },
       }),
     notify: (message, level) => ctx.ui.notify(message, level),
-  });
-
-  pi.registerCommand("checkpoint", {
-    description:
-      "Persist a validated deterministic checkpoint; argument is the exact next action",
-    handler: async (args, ctx) => {
-      try {
-        const result = await manager.create(runtime(ctx), {
-          exactNextAction: args.trim() || undefined,
-          governorState: policy(governor, Date.now()),
-        });
-        ctx.ui.notify(
-          `Checkpoint ${result.record.checkpointId}: ${result.record.artifactPath}`,
-          "info",
-        );
-      } catch (error) {
-        ctx.ui.notify(
-          error instanceof Error ? error.message : String(error),
-          "error",
-        );
-      }
-    },
   });
 
   pi.registerCommand("handoff", {

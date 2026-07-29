@@ -253,7 +253,7 @@ export function prepareDeterministicCheckpoint(
     );
   if (merged.checkpoint.nextActions.length === 0) {
     throw new Error(
-      "Checkpoint evidence is incomplete: provide an exact next action with /checkpoint <next action>.",
+      "Checkpoint evidence is incomplete: an exact next action is required.",
     );
   }
   const serialized = checkpointCore.serialize(merged.checkpoint);

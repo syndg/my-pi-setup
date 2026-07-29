@@ -14,7 +14,7 @@ The extension tracks:
 - pressure level and reasons;
 - tool-result bytes by tool for the latest settled run.
 
-At Yellow or above, each outgoing provider context receives a small hidden advisory message. It recommends optional, scoped least-privilege delegation (`research`, `coding`, `review`, or `minimal`), bounded structured reports, and artifact references. The message is added through Pi's request-time `context` event and is not written to agent state or the session JSONL.
+Request-time pressure instructions are retired. The footer and `/context-status` provide observability without adding model-visible messages.
 
 The extension does not compact, prune, block, cap, or rewrite stored history.
 
@@ -57,7 +57,7 @@ Example:
   "emergencyMarginTokens": 8192,
   "recoveryRuns": 2,
   "notice": {
-    "enabled": true,
+    "enabled": false,
     "maxCharacters": 320
   },
   "footer": {
