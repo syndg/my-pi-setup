@@ -18,7 +18,7 @@ const packageDirectory = path.dirname(fileURLToPath(import.meta.url));
 async function createChild(
   cwd: string,
   agentDir: string,
-  options: { allowToolConflict?: boolean } = {},
+  options: { allowToolConflict?: boolean; tools?: string[] } = {},
 ) {
   const settingsManager = SettingsManager.create(cwd, agentDir, {
     projectTrusted: false,
@@ -39,6 +39,7 @@ async function createChild(
     settingsManager,
     resourceLoader: loader,
     sessionManager: SessionManager.inMemory(cwd),
+    ...(options.tools ? { tools: options.tools } : {}),
     excludeTools: [
       "subagent_spawn",
       "subagent_wait",
@@ -147,6 +148,36 @@ test("half-active paired ownership disables the remaining active tool", async ()
       const active = new Set(child.getActiveToolNames());
       assert.equal(active.has("read"), false);
       assert.equal(active.has("edit"), false);
+    } finally {
+      child.dispose();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("read-only child inventory keeps Hashline read active without edit", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "hashline-read-only-"));
+  const agentDir = path.join(directory, "agent");
+  try {
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({ packages: [packageDirectory] }),
+    );
+    const child = await createChild(directory, agentDir, { tools: ["read"] });
+    try {
+      const active = new Set(child.getActiveToolNames());
+      assert.equal(active.has("read"), true);
+      assert.equal(active.has("edit"), false);
+      const readSource = child
+        .getAllTools()
+        .find((tool) => tool.name === "read")?.sourceInfo.path;
+      const editSource = child
+        .getAllTools()
+        .find((tool) => tool.name === "edit")?.sourceInfo.path;
+      assert.match(readSource ?? "", /hashline\/index\.ts$/);
+      assert.equal(editSource, undefined);
     } finally {
       child.dispose();
     }

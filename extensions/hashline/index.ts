@@ -32,8 +32,20 @@ function diagnoseOwnership(pi: ExtensionAPI, context: ExtensionContext) {
     canonicalSourcePath(tool.sourceInfo.path) === HASHLINE_EXTENSION_PATH;
   const ownsPair = owns(read) && owns(edit);
   const active = new Set(pi.getActiveTools());
-  const pairActive = active.has("read") === active.has("edit");
-  if (ownsPair && pairActive) return;
+  const readActive = active.has("read");
+  const editActive = active.has("edit");
+  const pairActive = readActive === editActive;
+
+  // Read-only child profiles intentionally omit edit from their inventory.
+  // Tagged reads remain safe when the active read is ours and no edit exists.
+  const intentionalReadOnly =
+    owns(read) && edit === undefined && readActive && !editActive;
+  if (
+    (ownsPair && pairActive) ||
+    intentionalReadOnly ||
+    (!readActive && !editActive)
+  )
+    return;
 
   // A half-active or split-owner protocol is unsafe: neither tool may remain
   // active until extension ordering/configuration is repaired.
