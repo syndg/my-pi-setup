@@ -1,11 +1,11 @@
 /**
- * Subagents — spawn background subagents on one of three backends
- * (pi, Claude Code, Codex) unified behind a single Effect service interface.
+ * Subagents — spawn background Pi child sessions behind one Effect service
+ * interface.
  *
  * Tools (for the parent LLM):
- * - subagent_spawn: fire-and-forget spawn (prompt, title, agent, working_dir,
- *   model, reasoning_effort). Max 4 running at once across all backends.
- * - subagent_wait: block until the listed subagents settle, return results.
+ * - subagent_spawn: fire-and-forget spawn (prompt, title, working_dir, model,
+ *   reasoning_effort). Max 4 running at once.
+ * - subagent_wait: block until every listed subagent settles, consume and return results.
  * - subagent_send: steer one running child with new orchestrator context.
  * - subagent_inbox: read and clear child-to-parent messages.
  * - subagent_cancel: stop one or more running subagents.
@@ -15,11 +15,9 @@
  * Unawaited subagents queue their result as a follow-up message when they
  * settle. `/subagents` opens a picker + full interactive takeover view.
  *
- * Architecture: Effect v4 generators throughout (backends -> manager ->
+ * Architecture: Effect v4 generators throughout (Pi backend -> manager ->
  * runtime); this file is the async boundary where tool handlers run effects
- * against one shared ManagedRuntime. All three backends are real: pi runs
- * in-process SDK sessions, claude drives the Claude Agent SDK, codex speaks
- * JSON-RPC to a scoped `codex app-server` process.
+ * against one shared ManagedRuntime. Pi children run as in-process SDK sessions.
  */
 
 import * as fs from "node:fs";

@@ -119,14 +119,8 @@ export function resolveDelegationPolicy(options: {
   });
 }
 
-function harnessPolicy(harness: BackendName, profile: ChildToolProfile) {
-  if (harness === "pi") {
-    return `Pi enforces the ${profile} schema allowlist and the recursive-orchestration denylist.`;
-  }
-  if (harness === "claude") {
-    return `Claude Code keeps its native tool policy; ${profile} is task guidance, while native Agent/Task delegation is disabled.`;
-  }
-  return `Codex keeps its native tool policy; ${profile} is task guidance, while its multi-agent feature is disabled.`;
+function harnessPolicy(profile: ChildToolProfile) {
+  return `Pi enforces the ${profile} schema allowlist and the recursive-orchestration denylist.`;
 }
 
 /** Append a bounded execution contract to the child's user task, not any system prompt. */
@@ -140,7 +134,7 @@ export function buildDelegatedChildPrompt(options: {
     policy.pressure === "conservative"
       ? `conservative fallback (${policy.stateDisposition})`
       : policy.pressure;
-  return `${options.prompt}\n\n[Delegated execution contract]\n- Profile: ${policy.profile}. ${harnessPolicy(options.harness, policy.profile)}\n- Context pressure: ${pressure}. Keep the final report at or below ${policy.outputBudgetBytes} UTF-8 bytes.\n- Do not spawn or coordinate other agents/workflows and do not ask the user. Continue only this assigned task.\n- Put large logs, generated data, and broad source listings in durable files; report paths or artifact URIs instead of pasting them.\n- Return these concise sections: Summary; Files changed/reviewed; Decisions and unresolved risks; Validation commands and outcomes; Artifacts.\n- Do not make unrelated edits, commit, build, install, reset, clean, or stash unless the task explicitly authorizes it.`;
+  return `${options.prompt}\n\n[Delegated execution contract]\n- Profile: ${policy.profile}. ${harnessPolicy(policy.profile)}\n- Context pressure: ${pressure}. Keep the final report at or below ${policy.outputBudgetBytes} UTF-8 bytes.\n- Do not spawn or coordinate other agents/workflows and do not ask the user. Continue only this assigned task.\n- Put large logs, generated data, and broad source listings in durable files; report paths or artifact URIs instead of pasting them.\n- Return these concise sections: Summary; Files changed/reviewed; Decisions and unresolved risks; Validation commands and outcomes; Artifacts.\n- Do not make unrelated edits, commit, build, install, reset, clean, or stash unless the task explicitly authorizes it.`;
 }
 
 export function delegatedArtifactReferences(

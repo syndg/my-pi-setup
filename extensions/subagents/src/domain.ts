@@ -1,28 +1,22 @@
 /**
  * Domain model for subagents.
  *
- * Everything downstream of a backend (manager, tools, UI) speaks only these
- * types. Backends translate their native streams (pi session events, Claude
- * Agent SDK messages, Codex app-server JSON-RPC notifications) into the
- * normalized `SubagentEvent` union.
+ * Everything downstream of the Pi backend (manager, tools, UI) speaks only
+ * these types. The backend translates Pi session events into the normalized
+ * `SubagentEvent` union.
  */
 
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { Data } from "effect";
 import type { ChildToolProfile } from "../../shared/child-session.ts";
 
-export const BACKEND_NAMES = ["pi", "claude", "codex"] as const;
+export const BACKEND_NAMES = ["pi"] as const;
 export type BackendName = (typeof BACKEND_NAMES)[number];
 
 /** Who initiated the session. User asides stay out of model-facing tooling. */
 export type SubagentOrigin = "model" | "btw";
 
-/**
- * Shared reasoning-effort scale (pi's thinking levels). Each backend maps a
- * value to its nearest native equivalent: pi uses it directly, codex
- * translates to its reasoning-effort slugs, claude translates to thinking
- * budgets. Omitted = backend default (pi inherits the parent level).
- */
+/** Pi thinking levels. Omitted = inherit the parent level. */
 export const REASONING_EFFORTS = [
   "off",
   "minimal",
@@ -54,14 +48,13 @@ export interface SpawnTask {
   readonly title: string;
   readonly cwd: string;
   /**
-   * Generic model hint, interpreted per backend:
-   * pi: "provider/model-id" or bare model id; claude: model alias;
-   * codex: model slug. Omitted = backend default / inherit.
+   * Pi model hint: "provider/model-id" or a bare, unambiguous model id.
+   * Omitted = inherit the parent model.
    */
   readonly model?: string;
-  /** Shared effort scale; each backend maps it to its native equivalent. */
+  /** Pi thinking level; omitted = inherit the parent level. */
   readonly reasoningEffort?: ReasoningEffort;
-  /** Explicit Pi child schema profile; non-Pi harnesses use their native tool policy. */
+  /** Explicit Pi child schema profile. */
   readonly toolProfile?: ChildToolProfile;
   /** Final report budget selected from profile and validated parent pressure. */
   readonly reportBudgetBytes?: number;
@@ -70,13 +63,13 @@ export interface SpawnTask {
 
 export interface SubagentMeta {
   readonly backend: BackendName;
-  /** Display label, e.g. "anthropic/claude-opus-4-5" or "gpt-5-codex". */
+  /** Display label, e.g. "openai-codex/gpt-5.6-sol". */
   readonly modelLabel?: string;
   /** Context window capacity for utilization display, when known. */
   readonly contextWindow?: number;
-  /** pi session file / Claude projects JSONL / Codex rollout path. */
+  /** Pi child session file. */
   readonly sessionFilePath?: string;
-  /** Claude session id / Codex conversation id. */
+  /** Native Pi child session id, when available. */
   readonly nativeSessionId?: string;
 }
 

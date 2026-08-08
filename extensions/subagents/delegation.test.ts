@@ -5,13 +5,12 @@ import {
   emptyGovernorState,
   type PressureLevel,
 } from "../shared/context-governor-state.ts";
-import { CLAUDE_DISALLOWED_TOOLS } from "./src/backends/claude.ts";
-import { CODEX_APP_SERVER_ARGS } from "./src/backends/codex.ts";
 import {
   buildDelegatedChildPrompt,
   delegatedArtifactReferences,
   resolveDelegationPolicy,
 } from "./src/delegation.ts";
+import { BACKEND_NAMES } from "./src/domain.ts";
 
 function state(level: PressureLevel | null, capturedAtMs = 10_000) {
   return {
@@ -71,7 +70,11 @@ test("missing, invalid, stale, wrong-session, and unknown pressure fail conserva
   }
 });
 
-test("child prompt injection is a bounded structured user-task contract for every harness", () => {
+test("Pi is the only exposed harness", () => {
+  assert.deepEqual(BACKEND_NAMES, ["pi"]);
+});
+
+test("child prompt injection is a bounded structured Pi task contract", () => {
   const policy = resolveDelegationPolicy({
     governorState: state("orange"),
     sessionId: "session-a",
@@ -79,28 +82,22 @@ test("child prompt injection is a bounded structured user-task contract for ever
     nowMs: 10_001,
   });
   assert.equal(policy.injectionSurface, "child-user-prompt");
-  for (const harness of ["pi", "claude", "codex"] as const) {
-    const prompt = buildDelegatedChildPrompt({
-      prompt: "Inspect src only.",
-      harness,
-      policy,
-    });
-    assert.ok(prompt.startsWith("Inspect src only."));
-    assert.match(prompt, /Summary; Files changed\/reviewed; Decisions/);
-    assert.match(prompt, /8192 UTF-8 bytes/);
-    assert.match(prompt, /Do not spawn or coordinate other agents\/workflows/);
-    assert.match(prompt, /artifact URIs/);
-  }
+  const prompt = buildDelegatedChildPrompt({
+    prompt: "Inspect src only.",
+    harness: "pi",
+    policy,
+  });
+  assert.ok(prompt.startsWith("Inspect src only."));
+  assert.match(prompt, /Pi enforces the coding schema allowlist/);
+  assert.match(prompt, /Summary; Files changed\/reviewed; Decisions/);
+  assert.match(prompt, /8192 UTF-8 bytes/);
+  assert.match(prompt, /Do not spawn or coordinate other agents\/workflows/);
+  assert.match(prompt, /artifact URIs/);
 });
 
-test("recursive orchestration is disabled per harness without claiming OS isolation", () => {
+test("recursive orchestration is disabled without claiming OS isolation", () => {
   const pi = childToolPolicy("coding", ["message_orchestrator"]);
   assert.equal(pi.tools.includes("subagent_spawn"), false);
-  assert.deepEqual([...CLAUDE_DISALLOWED_TOOLS], ["Agent", "Task"]);
-  assert.deepEqual([...CODEX_APP_SERVER_ARGS].slice(-2), [
-    "--disable",
-    "multi_agent",
-  ]);
 });
 
 test("completion references the durable child transcript instead of embedding it", () => {

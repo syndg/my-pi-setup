@@ -43,13 +43,21 @@ test("one extension instance resets activation between sessions and restores res
   type Handler = (event: unknown, ctx: unknown) => unknown;
   const handlers = new Map<string, Handler[]>();
   let active = ["read", "subagent_spawn", ...SUBAGENT_CONTROL_TOOL_NAMES];
+  let harnessOptions: readonly string[] | undefined;
   let entries: readonly unknown[] = [];
   const pi = {
     events: { on: () => () => {} },
     on: (name: string, handler: Handler) => {
       handlers.set(name, [...(handlers.get(name) ?? []), handler]);
     },
-    registerTool: () => {},
+    registerTool: (tool: {
+      name: string;
+      parameters?: { properties?: { harness?: { enum?: readonly string[] } } };
+    }) => {
+      if (tool.name === "subagent_spawn") {
+        harnessOptions = tool.parameters?.properties?.harness?.enum;
+      }
+    },
     registerMessageRenderer: () => {},
     registerEntryRenderer: () => {},
     registerCommand: () => {},
@@ -60,6 +68,7 @@ test("one extension instance resets activation between sessions and restores res
     appendEntry: () => {},
   };
   subagentsExtension(pi as never);
+  assert.deepEqual(harnessOptions, ["pi"]);
   const ctx = {
     hasUI: false,
     sessionManager: { getEntries: () => entries },

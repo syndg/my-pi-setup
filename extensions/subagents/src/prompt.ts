@@ -1,17 +1,17 @@
 /** All model-facing strings for the subagents tools. */
 
-/** Describes subagent_spawn, including harnesses and the fixed concurrency cap. */
+/** Describes subagent_spawn and the fixed concurrency cap. */
 export const SUBAGENT_SPAWN_TOOL_DESCRIPTION =
-  "Spawn a background subagent: a fully autonomous, headless agent with its own context window and the selected harness's normal host permissions. You choose the harness it runs on: pi (in-process pi session, inherits this environment's tools and config), claude (Claude Code), or codex (Codex CLI). Fire-and-forget: this returns immediately with an id. The subagent's final output is queued back to you as a message when it settles, or collect it explicitly with subagent_wait. Children cannot orchestrate more agents/workflows or ask the user, and cannot see this conversation, so the prompt must be self-contained. Only use trusted working directories. Max 4 subagents can be running at once across all harnesses.";
+  "Spawn a background subagent: a fully autonomous, headless Pi agent with its own context window and this environment's tools and config. Fire-and-forget: this returns immediately with an id. The subagent's final output is queued back to you as a message when it settles, or collect it explicitly with subagent_wait. Children cannot orchestrate more agents/workflows or ask the user, and cannot see this conversation, so the prompt must be self-contained. Only use trusted working directories. Max 4 subagents can be running at once.";
 
 /** Adds background subagent delegation to the parent model's available-tools prompt. */
 export const SUBAGENT_SPAWN_PROMPT_SNIPPET =
-  "Spawn a background subagent on a chosen harness (pi, Claude Code, or Codex; own context, normal tools) for a self-contained task";
+  "Spawn a background Pi subagent (own context, normal tools) for a self-contained task";
 
 /** Guides the parent model to delegate standalone tasks and avoid unnecessary blocking waits. */
 export const SUBAGENT_SPAWN_PROMPT_GUIDELINES = [
   "Use subagent_spawn to delegate self-contained tasks that can run in the background; give it a complete, standalone prompt.",
-  "Pick the subagent harness deliberately: pi unless you have a reason to prefer Claude Code or Codex (e.g. the user asked for one, or the task suits that harness).",
+  "Pi is the only available subagent harness.",
   "After subagent_spawn, keep working; results arrive automatically. Only call subagent_wait when you cannot proceed without the result.",
   "At Yellow+ context pressure, prefer narrowly scoped delegation and choose the least-privilege research, coding, review, or minimal profile; delegation remains optional and is never automatic.",
 ];
@@ -21,16 +21,15 @@ export const SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS = {
   prompt:
     "Task prompt for the subagent. Must be self-contained: include all needed context, file paths, and what to report back.",
   name: "Short human-readable name for this subagent, shown in listings and the UI",
-  harness:
-    'Harness to run the subagent on: "pi" (in-process pi session; inherits this environment), "claude" (Claude Code), or "codex" (Codex CLI). Choose deliberately per task.',
+  harness: 'Harness to run the subagent on. Only "pi" is available.',
   workingDir:
     "Trusted working directory for the autonomous child (default: current working directory)",
   model:
-    'Model hint, interpreted by the chosen harness (pi: "provider/model-id" or model id; claude: model alias like "sonnet"/"opus"; codex: model slug). Omit for the harness default (pi inherits the current model).',
+    'Pi model hint: "provider/model-id" or a bare, unambiguous model id. Omit to inherit the current model.',
   reasoningEffort:
-    "Reasoning effort on a shared scale; the harness maps it to its nearest native equivalent (pi thinking level, codex reasoning effort, claude thinking budget). Omit for the harness default (pi inherits the current level).",
+    "Pi thinking level. Omit to inherit the current thinking level.",
   profile:
-    'Execution profile: "coding" (default), "research", "review", or "minimal". Pi enforces the matching tool-schema allowlist. Claude Code and Codex retain native tool policies and use the profile as scoped execution guidance. Every profile selects an explicit pressure-aware final-report budget.',
+    'Execution profile: "coding" (default), "research", "review", or "minimal". Pi enforces the matching tool-schema allowlist. Every profile selects an explicit pressure-aware final-report budget.',
 };
 
 /** Builds the subagent_spawn result that tells the parent model how to continue or inspect the child. */
@@ -89,7 +88,7 @@ export const SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS = {
 
 /** Describes listing all tracked running and settled subagents. */
 export const SUBAGENT_LIST_TOOL_DESCRIPTION =
-  "List all subagents (running and finished) with their harness and status.";
+  "List all subagents (running and finished) with their status.";
 
 /** Builds the child completion/failure wrapper injected into the parent model's context. */
 export function buildSubagentResultMessage(options: {

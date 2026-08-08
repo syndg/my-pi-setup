@@ -1,11 +1,6 @@
 /**
- * The unified backend interface: one `SubagentBackend` per agent runtime
- * (pi, Claude Code, Codex), all producing the same `SubagentSession` shape.
- *
- * Planned real implementations (currently stubbed in ./backends/):
- * - pi: in-process `createAgentSession()` via the pi SDK.
- * - claude: `@anthropic-ai/claude-agent-sdk` `query()` in streaming-input mode.
- * - codex: `codex app-server` child process speaking JSON-RPC over stdio.
+ * The backend boundary between the manager and an in-process Pi child session.
+ * The normalized interface keeps session mechanics out of tools and UI.
  */
 
 import type { Effect, Scope, Stream } from "effect";
@@ -59,7 +54,7 @@ export interface SubagentSession {
 export interface SubagentBackend {
   readonly name: BackendName;
   readonly capabilities: BackendCapabilities;
-  /** Probe availability (binary on PATH, SDK importable, credentials). */
+  /** Probe Pi SDK/session availability. */
   readonly available: Effect.Effect<boolean>;
   /**
    * Spawn a session. Scoped: closing the scope interrupts/kills the
@@ -71,7 +66,7 @@ export interface SubagentBackend {
   ): Effect.Effect<SubagentSession, SpawnError, Scope.Scope>;
 }
 
-/** Registry of all wired backends, keyed by name. */
+/** Registry of wired backends, keyed by name. Pi is the sole backend. */
 export class BackendRegistry extends Context.Service<
   BackendRegistry,
   ReadonlyMap<BackendName, SubagentBackend>

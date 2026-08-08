@@ -1,22 +1,10 @@
-# subagents — Design Plan
+# Archived multi-harness design plan
 
-A pi extension that fires off background subagents from a parent pi session, where each
-subagent can be powered by one of three backends — **pi** (in-process SDK session),
-**Claude Code** (`@anthropic-ai/claude-agent-sdk`), or **Codex** (`codex app-server`) —
-unified behind a single Effect v4 service interface.
+This document is preserved as historical design context for the original three-backend implementation.
 
-> **Status:** this document describes the original v1 plan (stubbed backends). All
-> three backends are now REAL implementations — see `src/backends/{pi,claude,codex}.ts`.
-> The stub machinery survives in `src/backends/stub.ts` for the manager test registry.
+> **Current status:** the extension is Pi-only. Claude Code and Codex harnesses, their backend implementations, tests, and SDK dependency were removed. The live spawn schema exposes only `harness: "pi"`. See `README.md` and the source for current behavior.
 
-**Scope of the first version:** interface design + stubbed backend internals + the v1 UI
-carried over. No real Claude/Codex process integration yet; the pi backend may also stay
-stubbed initially so the manager/UI/tool loop can be exercised end to end with zero
-external dependencies.
-
-**Location:** `/Users/davis/.pi/agent/extensions/subagents/` — fully self-contained
-(no imports from `../shared` or `../subagents`; the handful of shared helpers v1 uses are
-copied in).
+> The remaining sections describe the superseded multi-harness plan and are not current implementation documentation.
 
 ---
 
