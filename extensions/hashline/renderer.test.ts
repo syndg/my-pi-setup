@@ -507,6 +507,32 @@ test("body borders align at the card edge for short and truncated lines", () => 
   assert.ok(lines.every((line) => visibleWidth(line) === width));
 });
 
+test("success frame uses a muted, continuous border around a separately styled header", () => {
+  const component = new HashlineEditComponent(theme);
+  component.updateArgs({ path: "border.ts" }, false);
+  component.settleSuccess(
+    {
+      diff: "-1 old\n+1 new",
+      patch: "patch",
+      firstChangedLine: 1,
+    },
+    false,
+    theme,
+  );
+
+  const lines = component.render(40);
+  const bodyBorder = theme.fg("borderMuted", "│");
+  const bodyLine = lines[1] ?? "";
+  assert.equal(
+    bodyLine.split(bodyBorder).length - 1,
+    2,
+    "both side borders should use the same muted foreground",
+  );
+  assert.ok(lines[0]?.includes(theme.fg("borderMuted", "╭───")));
+  assert.ok(lines[0]?.includes(theme.fg("success", "✓")));
+  assert.ok(lines[0]?.includes(theme.fg("toolTitle", "edit")));
+});
+
 test("untrusted terminal controls and tabs cannot escape the card", () => {
   const width = 52;
   const component = new HashlineEditComponent(theme);

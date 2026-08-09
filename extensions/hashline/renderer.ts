@@ -320,14 +320,15 @@ export class HashlineEditComponent implements Component {
         : this.#phase === "error"
           ? "toolErrorBg"
           : "toolPendingBg";
-    const borderColor =
-      this.#phase === "success"
-        ? "success"
-        : this.#phase === "error"
-          ? "error"
-          : "borderAccent";
+    const borderColor = this.#phase === "error" ? "error" : "borderMuted";
     const icon =
       this.#phase === "success" ? "✓" : this.#phase === "error" ? "✗" : "·";
+    const styledIcon =
+      this.#phase === "success"
+        ? theme.fg("success", icon)
+        : this.#phase === "error"
+          ? theme.fg("error", icon)
+          : theme.fg("dim", icon);
     const location = this.#firstChangedLine ? `:${this.#firstChangedLine}` : "";
     const diffLines =
       this.#diff
@@ -338,21 +339,27 @@ export class HashlineEditComponent implements Component {
     const removed = diffLines.filter((line) => line.startsWith("-")).length;
     const stats =
       this.#phase === "success" && (added || removed)
-        ? ` +${added} -${removed}`
+        ? ` ${theme.fg("toolDiffAdded", `+${added}`)} ${theme.fg("toolDiffRemoved", `-${removed}`)}`
         : "";
-    const title = `${icon} edit ${this.#path || "…"}${location}${stats}`;
+    const path = theme.fg("accent", `${this.#path || "…"}${location}`);
+    const title = `${styledIcon} ${theme.fg("toolTitle", "edit")} ${path}${stats}`;
 
     const paint = (line: string) => {
       const padded = line + " ".repeat(Math.max(0, width - visibleWidth(line)));
       return theme.bg(background, truncateToWidth(padded, width, ""));
     };
     const border = (text: string) => theme.fg(borderColor, text);
-    const shownTitle = truncateToWidth(title, Math.max(0, width - 5), "…");
-    const topLabel = width >= 5 ? `╭─ ${shownTitle} ` : "╭─ ";
-    const top = border(
-      `${topLabel}${"─".repeat(Math.max(0, width - visibleWidth(topLabel) - 1))}╮`,
-    );
     const bottom = border(`╰${"─".repeat(Math.max(0, width - 2))}╯`);
+    const top = (() => {
+      if (width < 7) {
+        return border(`╭${"─".repeat(Math.max(0, width - 2))}╮`);
+      }
+      const shownTitle = truncateToWidth(title, Math.max(0, width - 7), "…");
+      const fill = "─".repeat(
+        Math.max(0, width - 7 - visibleWidth(shownTitle)),
+      );
+      return `${border("╭───")} ${shownTitle} ${border(fill)}${border("╮")}`;
+    })();
 
     const maxBody = this.#expanded ? 40 : 8;
     let body: string[];
@@ -396,7 +403,7 @@ export class HashlineEditComponent implements Component {
       const inner =
         truncated +
         " ".repeat(Math.max(0, innerWidth - visibleWidth(truncated)));
-      return paint(`│ ${inner} │`);
+      return paint(`${border("│")} ${inner} ${border("│")}`);
     });
 
     const lines = [paint(top), ...renderedBody, paint(bottom)];
