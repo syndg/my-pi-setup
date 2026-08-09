@@ -17,9 +17,9 @@ The plan document defines **what** to build. This document defines **how to coor
 
 ## Repositories
 
-- Plan and orchestration: `/Volumes/External/Coding/my-pi-setup`
-- Personalized Pi fork: `/Volumes/External/Coding/pi-mono-fullscreen`
-- User extensions: `/Users/syndg/.pi/agent/extensions`
+- Plan and orchestration: `/Users/syndg/Coding/my-pi-setup`
+- Personalized Pi fork: `/Users/syndg/Coding/syn-pi`
+- User extensions: `/Users/syndg/Coding/my-pi-setup/extensions` (loaded through the local Pi package)
 - OMP reference: `/Volumes/External/Coding/oh-my-pi`
 
 ## Parallelization summary
@@ -695,10 +695,10 @@ Report: concise summary, files changed, tests, risks, unresolved questions.
 At the beginning of a new session:
 
 1. Read completely:
-   - `/Volumes/External/Coding/my-pi-setup/CONTEXT_MANAGEMENT_PLAN.md`
-   - `/Volumes/External/Coding/my-pi-setup/CONTEXT_MANAGEMENT_ORCHESTRATION.md`
-   - `/Volumes/External/Coding/my-pi-setup/docs/context-overhead-baseline.md`
-   - `/Volumes/External/Coding/my-pi-setup/docs/context-governor-observation.md`
+   - `/Users/syndg/Coding/my-pi-setup/CONTEXT_MANAGEMENT_PLAN.md`
+   - `/Users/syndg/Coding/my-pi-setup/CONTEXT_MANAGEMENT_ORCHESTRATION.md`
+   - `/Users/syndg/Coding/my-pi-setup/docs/context-overhead-baseline.md`
+   - `/Users/syndg/Coding/my-pi-setup/docs/context-governor-observation.md`
 2. Inspect setup, extension, and personalized-fork worktree state before editing.
 3. Reconcile source with private configs and verify whether the installed `dist/cli.js` has been rebuilt since these documents were written.
 4. Treat Waves 0–6 and Phases 2–9 as source-complete; do not restart implementation lanes solely because Gate B is open.

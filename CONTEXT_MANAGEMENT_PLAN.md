@@ -12,9 +12,9 @@
 
 ## Repositories and ownership
 
-- Personalized Pi fork: `/Volumes/External/Coding/pi-mono-fullscreen`
-- User extensions: `/Users/syndg/.pi/agent/extensions`
-- Setup/plan source of truth: `/Volumes/External/Coding/my-pi-setup/CONTEXT_MANAGEMENT_PLAN.md`
+- Personalized Pi fork: `/Users/syndg/Coding/syn-pi`
+- User extensions: `/Users/syndg/Coding/my-pi-setup/extensions` (loaded through the local Pi package)
+- Setup/plan source of truth: `/Users/syndg/Coding/my-pi-setup/CONTEXT_MANAGEMENT_PLAN.md`
 - Reference implementation: `/Volumes/External/Coding/oh-my-pi`
 
 ## Problem statement

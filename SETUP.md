@@ -1,12 +1,17 @@
 # Setup
 
-Clone or copy this repository to `~/.pi/agent`, then install its dependencies:
+Keep this repository in a normal Git checkout, preferably on internal storage, and install it as a local Pi package:
 
 ```sh
-cd ~/.pi/agent
-npm install
+git clone git@github.com:syndg/my-pi-setup.git ~/Coding/my-pi-setup
+cd ~/Coding/my-pi-setup
+npm ci
 npm --prefix extensions/hashline ci --omit=dev --omit=peer
+pi install "$PWD"
+pi config
 ```
+
+The local package points directly at this checkout; Pi does not copy it. Use `pi config` for global per-extension controls (`pi config -l` for project overrides), and use `/reload` after source or configuration changes. Do not also copy these extensions into `~/.pi/agent/extensions`, because duplicate entrypoints would load twice.
 
 The Hashline extension keeps its runtime diff dependency in its own package, so the second install command is required. `--omit=peer` is mandatory: Hashline must use the host's Pi packages so its mutation queue is shared with built-in tools.
 
@@ -22,7 +27,7 @@ The Hashline extension keeps its runtime diff dependency in its own package, so 
 The search, scrape, and crawl tools require a Firecrawl API key. Follow [Firecrawl's Node.js getting-started guide](https://docs.firecrawl.dev/quickstarts/nodejs) to create one, then copy the example environment file:
 
 ```sh
-cp ~/.pi/agent/.env.example ~/.pi/agent/.env
+cp ~/Coding/my-pi-setup/.env.example ~/.pi/agent/.env
 ```
 
 Replace the placeholder in `~/.pi/agent/.env` with your API key.
@@ -43,4 +48,4 @@ Add the included theme to `~/.pi/agent/settings.json` while keeping your existin
 }
 ```
 
-Pi will load the extensions, skills, and theme from their directories the next time it starts.
+Pi will load enabled extensions, skills, and themes from the registered local package the next time it starts.
