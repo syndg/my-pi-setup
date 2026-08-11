@@ -82,10 +82,44 @@ import {
   initializeWorkflowTool,
   shouldActivateWorkflow,
 } from "./activation.ts";
-import { offerCompletion } from "../context-output/src/completion.ts";
+import {
+  completeWithFallback,
+  offerCompletion,
+} from "../context-output/src/completion.ts";
 
 const PREVIEW_LENGTH = 200;
 const EMIT_INTERVAL_MS = 120;
+
+interface WorkflowSessionGeneration {
+  readonly sessionId: string;
+  readonly generation: number;
+}
+
+export function createWorkflowSessionGeneration() {
+  let generation = 0;
+  let active: WorkflowSessionGeneration | undefined;
+  return {
+    start(sessionId: string) {
+      active = { sessionId, generation: ++generation };
+    },
+    stop() {
+      generation++;
+      active = undefined;
+    },
+    capture(sessionId: string): WorkflowSessionGeneration {
+      return { sessionId, generation };
+    },
+    runIfCurrent<T>(token: WorkflowSessionGeneration, run: () => T) {
+      if (
+        active?.sessionId !== token.sessionId ||
+        active.generation !== token.generation
+      ) {
+        return undefined;
+      }
+      return run();
+    },
+  };
+}
 
 const THINKING_LEVELS = [
   "off",
@@ -267,6 +301,7 @@ export default function workflows(pi: ExtensionAPI) {
   let completedRuns = 0;
   let failedRuns = 0;
   let toolActivated = false;
+  const sessionGeneration = createWorkflowSessionGeneration();
   const updateIndicator = () => {
     const ui = lastUi;
     if (!ui) return;
@@ -309,6 +344,7 @@ export default function workflows(pi: ExtensionAPI) {
   };
 
   pi.on("session_start", (_event, ctx) => {
+    sessionGeneration.start(ctx.sessionManager.getSessionId());
     if (ctx.hasUI) lastUi = ctx.ui;
     initializeSessionToolActivation(ctx);
     updateIndicator();
@@ -331,6 +367,7 @@ export default function workflows(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async () => {
+    sessionGeneration.stop();
     const runs = [...activeRuns.values()];
     for (const run of runs) run.controller.abort("Session is shutting down");
     await Promise.all(
@@ -410,6 +447,9 @@ export default function workflows(pi: ExtensionAPI) {
     parameters: WorkflowParams,
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      const runSession = sessionGeneration.capture(
+        ctx.sessionManager.getSessionId(),
+      );
       let prepared: ReturnType<typeof prepareWorkflowScript>;
       try {
         prepared = prepareWorkflowScript(params.script);
@@ -731,35 +771,46 @@ export default function workflows(pi: ExtensionAPI) {
               status: details.status,
               result: buildWorkflowResultMessage(details, runDir),
             });
-            const delivery = offerCompletion(pi.events, {
-              kind: "workflow",
-              id: runId,
-              title: details.name ?? runId,
-              status: details.status === "completed" ? "success" : "failure",
-              output,
-              toolName: "workflow_completion",
-              outputClass: "subagent-final",
-              customType: "workflow-result",
-              details: { runId, status: details.status },
-              externalArtifactReferences: [
-                path.join(runDir, "result.json"),
-                path.join(runDir, "transcripts.json"),
-                path.join(runDir, "workflow.json"),
-              ],
+            const offered = sessionGeneration.runIfCurrent(runSession, () => ({
+              delivery: offerCompletion(pi.events, {
+                kind: "workflow",
+                id: runId,
+                title: details.name ?? runId,
+                status: details.status === "completed" ? "success" : "failure",
+                output,
+                toolName: "workflow_completion",
+                outputClass: "subagent-final",
+                customType: "workflow-result",
+                details: { runId, status: details.status },
+                externalArtifactReferences: [
+                  path.join(runDir, "result.json"),
+                  path.join(runDir, "transcripts.json"),
+                  path.join(runDir, "workflow.json"),
+                ],
+              }),
+            }));
+            // Validate before entering the broker; fallback validation alone
+            // cannot stop an old completion from reaching a replacement.
+            if (!offered) return;
+            const { delivery } = offered;
+            const sendDirect = () => {
+              sessionGeneration.runIfCurrent(runSession, () => {
+                pi.sendMessage(
+                  {
+                    customType: "workflow-result",
+                    content: output,
+                    display: true,
+                    details: { runId, status: details.status },
+                  },
+                  { deliverAs: "followUp", triggerTurn: true },
+                );
+              });
+            };
+            void completeWithFallback(delivery, sendDirect).catch((error) => {
+              sessionGeneration.runIfCurrent(runSession, () => {
+                console.error("workflows: failed to deliver completion", error);
+              });
             });
-            if (!delivery) {
-              pi.sendMessage(
-                {
-                  customType: "workflow-result",
-                  content: output,
-                  display: true,
-                  details: { runId, status: details.status },
-                },
-                details.status === "completed"
-                  ? { deliverAs: "nextTurn", triggerTurn: false }
-                  : { deliverAs: "followUp", triggerTurn: true },
-              );
-            }
           });
         return {
           content: [

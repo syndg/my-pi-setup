@@ -187,8 +187,13 @@ export type SubagentEvent =
  * The manager folds `SubagentEvent`s into one snapshot per subagent. This is
  * everything the tools, footer status, and both TUI views read.
  */
-export interface SubagentSnapshot {
+export interface SubagentRunIdentity {
   readonly id: string;
+  /** Monotonic within one child session; distinguishes restarted runs. */
+  readonly runSequence: number;
+}
+
+export interface SubagentSnapshot extends SubagentRunIdentity {
   readonly origin: SubagentOrigin;
   readonly backend: BackendName;
   readonly title: string;

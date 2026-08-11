@@ -10,7 +10,7 @@ Thin Phase 2 Pi adapter over `context-archive`.
 - Emits count-only observations (including `isError`, byte counts, limits, artifact state, and fail-open state) on `context-output:metrics`. Optional bounded non-context JSONL custom entries (`context-output-metrics`) are disabled by default.
 - Registers `context_recall`, which accepts a same-session artifact ID/`context://` URI, durable branch entry ID/`session-entry://` URI, or metadata query and always returns bounded safe slices.
 - Artifacts live under `~/.pi/agent/context-output/artifacts/<session-scope>/`; resuming the same session reuses that scope, while new/forked sessions receive another scope.
-- Completion producers use `context-output:completion`: routine successes are queued for the next user turn without waking the parent; failures (and explicit urgent/waited requests where exposed) use a waking follow-up. Existing child transcripts, terminal spill logs, and workflow artifacts remain authoritative and are referenced, not copied away.
+- Completion producers use `context-output:completion`: successful and failed unsolicited completions are handed to Pi as waking follow-ups, so they do not wait for another user message. Brokerage distinguishes synchronous handoff acceptance from confirmed async delivery; the current extension API exposes only void `pi.sendMessage`, so confirmation remains unavailable. Existing child transcripts, terminal spill logs, and workflow artifacts remain authoritative and are referenced, not copied away.
 
 ## Private config
 
@@ -40,4 +40,4 @@ node --test --experimental-strip-types *.test.ts
 /Volumes/External/Coding/pi-mono-fullscreen/node_modules/.bin/tsc --noEmit -p .
 ```
 
-Limitations: recall rejects arbitrary filesystem paths and foreign-session URIs. Shadow mode does not create archives because no output is shortened. Child-message urgency is not inferred because current producer schemas expose no urgency flag.
+Limitations: recall rejects arbitrary filesystem paths and foreign-session URIs. Shadow mode does not create archives because no output is shortened. Child-message urgency is not inferred because current producer schemas expose no urgency flag. `ExtensionAPI.sendMessage` returns void and reports later delivery errors only through an uncorrelated extension error event, so completion brokerage can confirm synchronous handoff but not final async delivery.

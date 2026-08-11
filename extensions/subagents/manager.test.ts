@@ -6,7 +6,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Effect, Layer, ManagedRuntime } from "effect";
+import { Effect, Layer, ManagedRuntime, Stream } from "effect";
 import {
   BackendRegistry,
   type BackendSpawnTask,
@@ -14,7 +14,12 @@ import {
 } from "./src/backend.ts";
 import { piBackend } from "./src/backends/pi.ts";
 import { makeStubBackend } from "./src/backends/stub.ts";
-import type { BackendName, ParentContext, SpawnTask } from "./src/domain.ts";
+import type {
+  BackendName,
+  ParentContext,
+  SpawnTask,
+  SubagentEvent,
+} from "./src/domain.ts";
 import {
   SubagentManager,
   SubagentManagerLive,
@@ -73,7 +78,7 @@ async function withManager(
   }
 }
 
-test("stub subagent completes and delivers a final result", async () => {
+test("successful waits leave settlement deliverable until the tool claims its run", async () => {
   await withManager(async (manager, runtime) => {
     const settled: Array<{ id: string; consumed: boolean }> = [];
     manager.view.setOnSettled((snap, consumed) =>
@@ -88,7 +93,7 @@ test("stub subagent completes and delivers a final result", async () => {
     assert.equal(snap.backend, "pi");
     assert.ok(snap.meta.sessionFilePath);
 
-    await runTool(runtime, manager.waitFor([snap.id]));
+    const [waited] = await runTool(runtime, manager.waitFor([snap]));
     const done = manager.view.get(snap.id);
     assert.ok(done);
     assert.equal(done.status, "done");
@@ -98,8 +103,44 @@ test("stub subagent completes and delivers a final result", async () => {
     );
     assert.ok(done.turns >= 2);
     assert.ok(done.transcript.some((item) => item.kind === "toolResult"));
-    // The waitFor marked the settle as consumed.
-    assert.deepEqual(settled, [{ id: snap.id, consumed: true }]);
+    assert.equal(waited?.id, snap.id);
+    assert.equal(waited?.runSequence, 1);
+    assert.equal(waited?.status, "done");
+    assert.match(waited?.finalText ?? "", /Say hello to the tests/);
+    assert.equal(Object.isFrozen(waited), true);
+    // The interruptible manager barrier does not consume before tool return.
+    assert.deepEqual(settled, [{ id: snap.id, consumed: false }]);
+  });
+});
+
+test("interrupting a wait releases retention without consuming settlement", async () => {
+  await withManager(async (manager, runtime) => {
+    const settled: Array<{ id: string; consumed: boolean }> = [];
+    manager.view.setOnSettled((snap, consumed) =>
+      settled.push({ id: snap.id, consumed }),
+    );
+    const snap = await runTool(
+      runtime,
+      manager.spawn("pi", task("Finish after the wait is interrupted")),
+    );
+    let markWaiting!: () => void;
+    const waitStarted = new Promise<void>((resolve) => {
+      markWaiting = resolve;
+    });
+    const controller = new AbortController();
+    const waiting = runTool(runtime, manager.waitFor([snap], markWaiting), {
+      signal: controller.signal,
+      interruptMessage: "Wait aborted",
+    });
+    await waitStarted;
+    controller.abort();
+
+    await assert.rejects(waiting, /Wait aborted/);
+    const [settledRun] = await runTool(runtime, manager.waitFor([snap]));
+
+    assert.equal(settledRun?.id, snap.id);
+    assert.equal(settledRun?.runSequence, 1);
+    assert.deepEqual(settled, [{ id: snap.id, consumed: false }]);
   });
 });
 
@@ -127,15 +168,78 @@ test("FAIL: prompts settle as errors; unconsumed settles are delivered", async (
 
 test("cancel interrupts a running stub subagent", async () => {
   await withManager(async (manager, runtime) => {
+    const settled: Array<{ id: string; consumed: boolean }> = [];
+    manager.view.setOnSettled((settledSnap, consumed) =>
+      settled.push({ id: settledSnap.id, consumed }),
+    );
     const snap = await runTool(
       runtime,
       manager.spawn("pi", task("Long running task")),
     );
-    const report = await runTool(runtime, manager.cancel([snap.id]));
+    const report = await runTool(runtime, manager.cancel([snap]));
     assert.deepEqual(report, [
-      { id: snap.id, title: "test", status: "error", cancelled: true },
+      {
+        id: snap.id,
+        runSequence: 1,
+        title: "test",
+        status: "error",
+        cancelled: true,
+      },
     ]);
     assert.equal(manager.view.get(snap.id)?.errorText, "Run was aborted");
+    // Manager cancellation does not consume before the interruptible tool
+    // boundary succeeds and claims this exact run.
+    assert.deepEqual(settled, [{ id: snap.id, consumed: false }]);
+  });
+});
+
+test("concurrent waits both remain barriers for the same exact run", async () => {
+  await withManager(async (manager, runtime) => {
+    const snap = await runTool(
+      runtime,
+      manager.spawn("pi", task("shared wait barrier")),
+    );
+    let firstSettled = false;
+    let secondSettled = false;
+    const firstWait = runTool(runtime, manager.waitFor([snap])).then((runs) => {
+      firstSettled = true;
+      return runs;
+    });
+    const secondWait = runTool(runtime, manager.waitFor([snap])).then(
+      (runs) => {
+        secondSettled = true;
+        return runs;
+      },
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(firstSettled, false);
+    assert.equal(secondSettled, false);
+
+    const [firstResult, secondResult] = await Promise.all([
+      firstWait,
+      secondWait,
+    ]);
+    assert.equal(firstResult[0]?.runSequence, 1);
+    assert.equal(secondResult[0]?.runSequence, 1);
+  });
+});
+
+test("cancel still acts while a wait retains the exact run", async () => {
+  await withManager(async (manager, runtime) => {
+    const snap = await runTool(
+      runtime,
+      manager.spawn("pi", task("cancel through wait ownership")),
+    );
+    const waiting = runTool(runtime, manager.waitFor([snap]));
+
+    const [cancelled] = await runTool(runtime, manager.cancel([snap]));
+    const [waited] = await waiting;
+
+    assert.equal(cancelled?.cancelled, true);
+    assert.equal(cancelled?.runSequence, 1);
+    assert.equal(waited?.runSequence, 1);
+    assert.equal(waited?.status, "error");
   });
 });
 
@@ -160,7 +264,7 @@ test("spawn origin propagates to ids, snapshots, and settlement", async () => {
     assert.match(btw.id, /^btw-/);
     assert.equal(btw.origin, "btw");
 
-    await runTool(runtime, manager.cancel([model.id, btw.id]));
+    await runTool(runtime, manager.cancel([model, btw]));
     assert.deepEqual(
       settled.sort((a, b) => a.id.localeCompare(b.id)),
       [
@@ -288,7 +392,7 @@ test("orchestrator messages only steer running children", async () => {
     );
     assert.equal(messageId, "pm-1");
 
-    await runTool(runtime, manager.cancel([snap.id]));
+    await runTool(runtime, manager.cancel([snap]));
     await assert.rejects(
       runTool(runtime, manager.message(snap.id, "One more thing")),
       /only be sent while it is running/,
@@ -303,7 +407,7 @@ test("idle restarts respect the concurrency cap", async () => {
       runtime,
       manager.spawn("pi", task("early finisher")),
     );
-    await runTool(runtime, manager.waitFor([settled.id]));
+    await runTool(runtime, manager.waitFor([settled]));
     await runTool(
       runtime,
       Effect.forEach(
@@ -327,18 +431,138 @@ test("send steers an idle subagent into another turn", async () => {
       runtime,
       manager.spawn("pi", task("First turn")),
     );
-    await runTool(runtime, manager.waitFor([snap.id]));
+    await runTool(runtime, manager.waitFor([snap]));
     const afterFirst = manager.view.get(snap.id);
     assert.equal(afterFirst?.status, "done");
+    assert.equal(afterFirst?.runSequence, 1);
 
     await runTool(runtime, manager.send(snap.id, "Second turn"));
     // The fresh run flips the status back to running...
     while (manager.view.get(snap.id)?.status !== "running") {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    await runTool(runtime, manager.waitFor([snap.id]));
+    await runTool(runtime, manager.waitFor([{ id: snap.id, runSequence: 2 }]));
     const afterSecond = manager.view.get(snap.id);
     assert.equal(afterSecond?.status, "done");
+    assert.equal(afterSecond?.runSequence, 2);
     assert.match(afterSecond?.finalText ?? "", /Second turn/);
   });
+});
+
+test("a waited settled snapshot stays exact across an immediate restart", async () => {
+  await withManager(async (manager, runtime) => {
+    const spawned = await runTool(
+      runtime,
+      manager.spawn("pi", task("first immutable run")),
+    );
+    const [firstRun] = await runTool(runtime, manager.waitFor([spawned]));
+    assert.ok(firstRun);
+
+    await runTool(runtime, manager.send(spawned.id, "second mutable run"));
+    const [secondRun] = await runTool(
+      runtime,
+      manager.waitFor([{ id: spawned.id, runSequence: 2 }]),
+    );
+
+    assert.equal(firstRun.runSequence, 1);
+    assert.equal(firstRun.status, "done");
+    assert.match(firstRun.finalText, /first immutable run/);
+    assert.doesNotMatch(firstRun.finalText, /second mutable run/);
+    assert.equal(secondRun?.runSequence, 2);
+    assert.match(secondRun?.finalText ?? "", /second mutable run/);
+  });
+});
+
+test("cancelling a stale run identity never aborts its replacement", async () => {
+  await withManager(async (manager, runtime) => {
+    const first = await runTool(
+      runtime,
+      manager.spawn("pi", task("first run before stale cancel")),
+    );
+    const staleRun = { id: first.id, runSequence: first.runSequence };
+    await runTool(runtime, manager.waitFor([first]));
+    await runTool(runtime, manager.send(first.id, "replacement run"));
+    while (manager.view.get(first.id)?.runSequence !== 2) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    const [report] = await runTool(runtime, manager.cancel([staleRun]));
+
+    assert.equal(report?.id, first.id);
+    assert.equal(report?.runSequence, 1);
+    assert.equal(report?.cancelled, false);
+    assert.equal(manager.view.get(first.id)?.runSequence, 2);
+    assert.equal(manager.view.get(first.id)?.status, "running");
+
+    const replacement = manager.view.get(first.id);
+    assert.ok(replacement);
+    await runTool(runtime, manager.cancel([replacement]));
+  });
+});
+
+test("an acknowledged exact-run interrupt blocks restart until settlement is folded", async () => {
+  let markInterruptAcknowledged = () => {};
+  const interruptAcknowledged = new Promise<void>((resolve) => {
+    markInterruptAcknowledged = resolve;
+  });
+  let releaseSettlementEvent = () => {};
+  const settlementEventRelease = new Promise<void>((resolve) => {
+    releaseSettlementEvent = resolve;
+  });
+  const backend: SubagentBackend = {
+    ...messagingPiStub,
+    spawn: (spawnTask) =>
+      messagingPiStub.spawn(spawnTask).pipe(
+        Effect.map((session) => ({
+          ...session,
+          events: session.events.pipe(
+            Stream.mapEffect((event): Effect.Effect<SubagentEvent> =>
+              event._tag === "RunSettled"
+                ? Effect.promise(() => settlementEventRelease).pipe(
+                    Effect.as(event),
+                  )
+                : Effect.succeed(event),
+            ),
+          ),
+          interrupt: session.interrupt.pipe(
+            Effect.tap(() => Effect.sync(markInterruptAcknowledged)),
+          ),
+        })),
+      ),
+  };
+
+  await withManager(async (manager, runtime) => {
+    const first = await runTool(
+      runtime,
+      manager.spawn("pi", task("settle while interrupt is pending")),
+    );
+    const cancellation = runTool(runtime, manager.cancel([first]));
+    await interruptAcknowledged;
+    assert.equal(manager.view.get(first.id)?.status, "running");
+    try {
+      await assert.rejects(
+        runTool(runtime, manager.send(first.id, "replacement must wait")),
+        /being cancelled/,
+      );
+      await assert.rejects(
+        runTool(
+          runtime,
+          manager.message(first.id, "public subagent_send must wait"),
+        ),
+        /being cancelled/,
+      );
+    } finally {
+      releaseSettlementEvent();
+    }
+    await cancellation;
+
+    await runTool(runtime, manager.send(first.id, "safe replacement"));
+    while (manager.view.get(first.id)?.runSequence !== 2) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const replacement = manager.view.get(first.id);
+    assert.equal(replacement?.status, "running");
+    assert.ok(replacement);
+    await runTool(runtime, manager.cancel([replacement]));
+  }, backend);
 });

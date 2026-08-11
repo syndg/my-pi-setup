@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   boundedLiveMessage,
+  childMessageDeliveryOptions,
   liveMessageBudgetBytes,
   MAX_SUBAGENT_MESSAGE_CHARS,
   ParentChildMailbox,
@@ -86,7 +87,7 @@ test("live messages use the tightest pressure/profile budget", () => {
   assert.match(bounded, /full text remains in subagent_inbox/);
 });
 
-test("routine live messages do not wake but failures, urgency, and replies do", () => {
+test("live message routing steers active replies and wakes every routine delivery", () => {
   const mailbox = new ParentChildMailbox();
   const info = mailbox.receiveChildMessage("sa-1", "one", "progress update");
   const failure = mailbox.receiveChildMessage(
@@ -104,4 +105,24 @@ test("routine live messages do not wake but failures, urgency, and replies do", 
   assert.equal(shouldWakeForChildMessage(failure), true);
   assert.equal(shouldWakeForChildMessage(urgent), true);
   assert.equal(shouldWakeForChildMessage(reply), true);
+  assert.deepEqual(childMessageDeliveryOptions(reply, false), {
+    deliverAs: "steer",
+    triggerTurn: true,
+  });
+  assert.deepEqual(childMessageDeliveryOptions(urgent, false), {
+    deliverAs: "steer",
+    triggerTurn: true,
+  });
+  assert.deepEqual(childMessageDeliveryOptions(info, false), {
+    deliverAs: "followUp",
+    triggerTurn: true,
+  });
+  assert.deepEqual(childMessageDeliveryOptions(info, true), {
+    deliverAs: "followUp",
+    triggerTurn: true,
+  });
+  assert.deepEqual(childMessageDeliveryOptions(reply, true), {
+    deliverAs: "followUp",
+    triggerTurn: true,
+  });
 });

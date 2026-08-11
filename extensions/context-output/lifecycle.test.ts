@@ -9,6 +9,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { createContextOutputExtension } from "./index.ts";
 import { parseContextOutputConfig } from "./src/config.ts";
+import { offerCompletion } from "./src/completion.ts";
 
 class FakePi {
   readonly events = createEventBus();
@@ -45,6 +46,69 @@ const config = parseContextOutputConfig({
 });
 const context = (id: string, entries: any[] = []) => ({
   sessionManager: { getSessionId: () => id, getBranch: () => entries },
+});
+
+test("successful completion brokerage queues a waking follow-up without claiming confirmation", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "context-output-completion-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const pi = new FakePi();
+  createContextOutputExtension({ config, rootDirectory: root })(
+    pi as unknown as ExtensionAPI,
+  );
+  await pi.emit("session_start", {}, context("completion-session"));
+
+  const delivery = offerCompletion(pi.events, {
+    kind: "subagent",
+    id: "sa-1:run-1",
+    title: "review",
+    status: "success",
+    output: "done",
+    toolName: "subagent_completion",
+    outputClass: "subagent-final",
+    customType: "subagent-result",
+  });
+
+  assert.ok(delivery);
+  assert.deepEqual(await delivery, {
+    claimed: true,
+    accepted: true,
+    delivered: true,
+    deliveryConfirmed: false,
+    wokeParent: true,
+  });
+  assert.deepEqual(pi.messages[0]?.options, {
+    deliverAs: "followUp",
+    triggerTurn: true,
+  });
+});
+
+test("shutdown rejects an in-flight completion before it reaches a replacement session", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "context-output-shutdown-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const pi = new FakePi();
+  createContextOutputExtension({ config, rootDirectory: root })(
+    pi as unknown as ExtensionAPI,
+  );
+  await pi.emit("session_start", {}, context("old-session"));
+
+  const delivery = offerCompletion(pi.events, {
+    kind: "subagent",
+    id: "sa-1:run-1",
+    title: "review",
+    status: "success",
+    output: "large enough to archive ".repeat(2_000),
+    toolName: "subagent_completion",
+    outputClass: "subagent-final",
+    customType: "subagent-result",
+  });
+  assert.ok(delivery);
+  await pi.emit("session_shutdown", {});
+
+  const outcome = await delivery;
+  assert.equal(outcome.accepted, false);
+  assert.equal(outcome.delivered, false);
+  assert.match(outcome.error ?? "", /session changed/);
+  assert.deepEqual(pi.messages, []);
 });
 
 test("JSONL metrics are bounded/count-only and same-session artifacts survive resume", async (t) => {

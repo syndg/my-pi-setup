@@ -44,6 +44,16 @@ export function shouldWakeForChildMessage(message: ChildToParentMessage) {
   );
 }
 
+export function childMessageDeliveryOptions(
+  message: ChildToParentMessage,
+  parentIdle: boolean,
+) {
+  if (!parentIdle && shouldWakeForChildMessage(message)) {
+    return { deliverAs: "steer", triggerTurn: true } as const;
+  }
+  return { deliverAs: "followUp", triggerTurn: true } as const;
+}
+
 export interface ParentToChildMessage {
   readonly id: string;
   readonly prompt: string;

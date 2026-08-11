@@ -52,11 +52,15 @@ import {
   formatActivityStatus,
   formatContextUtilization,
 } from "./src/format.ts";
-import { SubagentManager, type SubagentManagerShape } from "./src/manager.ts";
+import {
+  type CancelResult,
+  SubagentManager,
+  type SubagentManagerShape,
+} from "./src/manager.ts";
 import {
   boundedLiveMessage,
+  childMessageDeliveryOptions,
   liveMessageBudgetBytes,
-  shouldWakeForChildMessage,
   type ChildToParentMessage,
 } from "./src/messaging.ts";
 import {
@@ -77,7 +81,10 @@ import {
   SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS,
   SUBAGENT_WAIT_TOOL_DESCRIPTION,
 } from "./src/prompt.ts";
-import { createDeferredResultDelivery } from "./src/result-delivery.ts";
+import {
+  createDeferredResultDelivery,
+  subagentRunKey,
+} from "./src/result-delivery.ts";
 import {
   createSubagentRuntime,
   runTool,
@@ -229,7 +236,8 @@ export default function (pi: ExtensionAPI) {
       child?.reportBudgetBytes,
       policy.outputBudgetBytes,
     );
-    const wake = shouldWakeForChildMessage(message);
+    const context = sessionContext;
+    if (!context) return false;
     try {
       pi.sendMessage(
         {
@@ -240,9 +248,7 @@ export default function (pi: ExtensionAPI) {
           display: true,
           details: message,
         },
-        wake
-          ? { deliverAs: "followUp", triggerTurn: true }
-          : { deliverAs: "nextTurn", triggerTurn: false },
+        childMessageDeliveryOptions(message, context.isIdle()),
       );
       return true;
     } catch {
@@ -251,49 +257,79 @@ export default function (pi: ExtensionAPI) {
     }
   };
 
-  const deliverResult = (snap: SubagentSnapshot) => {
+  const deliverResult = (
+    snap: SubagentSnapshot,
+    complete: () => void,
+    retry: () => void,
+  ) => {
+    const settled = { ...snap, meta: { ...snap.meta } };
+    const deliveryContext = sessionContext;
     const output = buildSubagentResultMessage({
-      id: snap.id,
-      title: snap.title,
-      status: snap.status,
-      errorText: snap.errorText,
-      output: truncatedOutput(snap),
+      id: settled.id,
+      title: settled.title,
+      status: settled.status,
+      errorText: settled.errorText,
+      output: truncatedOutput(settled),
     });
+    const sendDirect = () => {
+      // Never leak an old child's completion into a replacement session.
+      if (!deliveryContext || sessionContext !== deliveryContext) {
+        retry();
+        return;
+      }
+      try {
+        pi.sendMessage(
+          {
+            customType: "subagent-result",
+            content: output,
+            display: true,
+            details: {
+              id: settled.id,
+              runSequence: settled.runSequence,
+              title: settled.title,
+              status: settled.status,
+            },
+          },
+          { deliverAs: "followUp", triggerTurn: true },
+        );
+        complete();
+      } catch {
+        retry();
+      }
+    };
     const delivery = offerCompletion(pi.events, {
       kind: "subagent",
-      id: snap.id,
-      title: snap.title,
-      status: snap.status === "error" ? "failure" : "success",
+      id: subagentRunKey(settled),
+      title: settled.title,
+      status: settled.status === "error" ? "failure" : "success",
       output,
       toolName: "subagent_completion",
       outputClass: "subagent-final",
       customType: "subagent-result",
-      details: { id: snap.id, title: snap.title, status: snap.status },
+      details: {
+        id: settled.id,
+        runSequence: settled.runSequence,
+        title: settled.title,
+        status: settled.status,
+      },
       externalArtifactReferences: delegatedArtifactReferences(
-        snap.meta.sessionFilePath,
+        settled.meta.sessionFilePath,
       ),
     });
-    if (delivery) {
-      void delivery.then((outcome) => {
-        if (!outcome.delivered && sessionContext) resultDelivery.defer(snap);
-      });
+    if (!delivery) {
+      sendDirect();
       return;
     }
-    pi.sendMessage(
-      {
-        customType: "subagent-result",
-        content: output,
-        display: true,
-        details: { id: snap.id, title: snap.title, status: snap.status },
-      },
-      snap.status === "error"
-        ? { deliverAs: "followUp", triggerTurn: true }
-        : { deliverAs: "nextTurn", triggerTurn: false },
-    );
+    void delivery.then((outcome) => {
+      if (outcome.accepted) complete();
+      else sendDirect();
+    }, sendDirect);
   };
 
   const flushResults = () => {
-    for (const snap of resultDelivery.drain()) deliverResult(snap);
+    for (const delivery of resultDelivery.beginAutomaticDelivery()) {
+      deliverResult(delivery.result, delivery.complete, delivery.retry);
+    }
   };
 
   const deliverBtwResult = (snap: SubagentSnapshot) => {
@@ -325,16 +361,11 @@ export default function (pi: ExtensionAPI) {
       deliverBtwResult({ ...snap, meta: { ...snap.meta } });
       return;
     }
-    if (consumed) {
-      resultDelivery.consume([snap.id]);
-      return;
-    }
-    // Keep the result retractable while the parent is working. A later
-    // subagent_wait can consume it before agent_settled flushes follow-ups.
-    // Defer a copy: the live snapshot keeps mutating if the subagent is
-    // restarted before the deferred result flushes.
+    if (consumed) return;
+    // The keyed lifecycle keeps this exact run retractable until either a
+    // wait/cancel tool or automatic delivery atomically owns it.
     resultDelivery.defer({ ...snap, meta: { ...snap.meta } });
-    if (sessionContext?.isIdle()) flushResults();
+    if (sessionContext.isIdle()) flushResults();
   };
 
   const initializeSessionToolActivation = (ctx: ExtensionContext) => {
@@ -348,6 +379,7 @@ export default function (pi: ExtensionAPI) {
   };
 
   pi.on("session_start", (_event, ctx) => {
+    if (sessionContext && sessionContext !== ctx) resultDelivery.clear();
     sessionContext = ctx;
     if (ctx.hasUI) ui = ctx.ui;
     initializeSessionToolActivation(ctx);
@@ -521,29 +553,81 @@ export default function (pi: ExtensionAPI) {
         );
       }
 
-      await runTool(
-        getRuntime(),
-        manager.waitFor(ids, (pending) => {
-          onUpdate?.({
-            content: [
-              { type: "text", text: `Waiting for ${pending.join(", ")}...` },
-            ],
-            details: { pending },
-          });
-        }),
-        { signal, interruptMessage: "Wait aborted. Subagents keep running." },
-      );
+      const requestedRuns = ids.map((id) => {
+        const snap = manager.view.get(id)!;
+        return {
+          id: snap.id,
+          runSequence: snap.runSequence,
+          title: snap.title,
+          status: snap.status,
+        };
+      });
+      const waitOwner = resultDelivery.createToolOwner("wait");
+      const reservations = resultDelivery.reserve(waitOwner, requestedRuns);
+      const ownedRuns = reservations
+        .filter((reservation) => reservation.ownership === "tool")
+        .map((reservation) => reservation.run);
+      let settledRuns: ReadonlyArray<SubagentSnapshot>;
+      try {
+        // Delivery ownership controls duplication only. Every caller still
+        // waits on every exact run it requested.
+        settledRuns = await runTool(
+          getRuntime(),
+          manager.waitFor(requestedRuns, (pending) => {
+            onUpdate?.({
+              content: [
+                {
+                  type: "text",
+                  text: `Waiting for ${pending.join(", ")}...`,
+                },
+              ],
+              details: { pending },
+            });
+          }),
+          {
+            signal,
+            interruptMessage: "Wait aborted. Subagents keep running.",
+          },
+        );
+      } catch (error) {
+        resultDelivery.release(waitOwner, ownedRuns);
+        flushResults();
+        throw error;
+      }
 
-      // Settlement may have happened before this wait began. Remove any
-      // deferred automatic delivery now that the tool is returning the result.
-      resultDelivery.consume(ids);
+      // Ownership transfers only after the interruptible tool boundary returns.
+      resultDelivery.consume(waitOwner, settledRuns);
+      const settledByKey = new Map(
+        settledRuns.map((snap) => [subagentRunKey(snap), snap]),
+      );
+      resultDelivery.release(
+        waitOwner,
+        ownedRuns.filter((run) => !settledByKey.has(subagentRunKey(run))),
+      );
 
       const sections: string[] = [];
       let remainingBytes = WAIT_OUTPUT_MAX_BYTES;
-      for (const id of ids) {
-        const snap = manager.view.get(id);
+      for (const reservation of reservations) {
+        const requested = requestedRuns.find(
+          (run) => subagentRunKey(run) === subagentRunKey(reservation.run),
+        )!;
+        if (reservation.ownership !== "tool") {
+          const reason =
+            reservation.ownership === "automatic"
+              ? "automatic delivery already owns this exact run"
+              : reservation.ownership === "consumed"
+                ? "this exact run was already consumed by another tool result"
+                : "another interruptible tool currently owns this exact run";
+          sections.push(
+            `## ${requested.id} run ${requested.runSequence}\n\n[not duplicated: ${reason}]`,
+          );
+          continue;
+        }
+        const snap = settledByKey.get(subagentRunKey(reservation.run));
         if (!snap) {
-          sections.push(`## ${id}\n\n(no longer tracked)`);
+          sections.push(
+            `## ${requested.id} run ${requested.runSequence}\n\n[exact run is no longer tracked]`,
+          );
           continue;
         }
         const verb = snap.status === "error" ? "failed" : "finished";
@@ -581,9 +665,18 @@ export default function (pi: ExtensionAPI) {
       return {
         content: [{ type: "text", text }],
         details: {
-          results: ids.map((id) => {
-            const snap = manager.view.get(id);
-            return { id, title: snap?.title, status: snap?.status };
+          results: reservations.map((reservation) => {
+            const snap = settledByKey.get(subagentRunKey(reservation.run));
+            const requested = requestedRuns.find(
+              (run) => subagentRunKey(run) === subagentRunKey(reservation.run),
+            )!;
+            return {
+              id: reservation.run.id,
+              runSequence: reservation.run.runSequence,
+              title: snap?.title ?? requested.title,
+              status: snap?.status ?? requested.status,
+              ownership: reservation.ownership,
+            };
           }),
         },
       };
@@ -684,11 +777,54 @@ export default function (pi: ExtensionAPI) {
         );
       }
 
-      const report = await runTool(getRuntime(), manager.cancel(ids), {
-        signal,
-        interruptMessage: "Subagent cancellation aborted.",
+      const cancelRuns = ids.flatMap((id) => {
+        const snap = manager.view.get(id);
+        return snap?.status === "running"
+          ? [{ id: snap.id, runSequence: snap.runSequence }]
+          : [];
       });
+      const cancelOwner = resultDelivery.createToolOwner("cancel");
+      const reservations = resultDelivery.reserve(cancelOwner, cancelRuns);
+      const ownedRuns = reservations
+        .filter((reservation) => reservation.ownership === "tool")
+        .map((reservation) => reservation.run);
+      let cancelled: ReadonlyArray<CancelResult>;
+      try {
+        // Result ownership may suppress duplicate consumption, never the
+        // cancellation action for an exact run.
+        cancelled = await runTool(getRuntime(), manager.cancel(cancelRuns), {
+          signal,
+          interruptMessage: "Subagent cancellation aborted.",
+        });
+      } catch (error) {
+        resultDelivery.release(cancelOwner, ownedRuns);
+        flushResults();
+        throw error;
+      }
 
+      const cancelledRuns = cancelled.filter((entry) => entry.cancelled);
+      resultDelivery.consume(cancelOwner, cancelledRuns);
+      resultDelivery.release(
+        cancelOwner,
+        ownedRuns.filter(
+          (run) =>
+            !cancelledRuns.some(
+              (entry) => subagentRunKey(entry) === subagentRunKey(run),
+            ),
+        ),
+      );
+      const report = ids.map((id) => {
+        const entry = cancelled.find((item) => item.id === id);
+        if (entry) return entry;
+        const snap = manager.view.get(id)!;
+        return {
+          id,
+          runSequence: snap.runSequence,
+          title: snap.title,
+          status: snap.status,
+          cancelled: false,
+        };
+      });
       const lines = report.map((entry) =>
         entry.cancelled
           ? `Cancelled ${entry.id} "${entry.title}".`
@@ -700,6 +836,7 @@ export default function (pi: ExtensionAPI) {
         details: {
           results: report.map((entry) => ({
             id: entry.id,
+            runSequence: entry.runSequence,
             title: entry.title,
             status: entry.status,
           })),

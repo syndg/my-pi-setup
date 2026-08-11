@@ -59,7 +59,10 @@ import {
   branchHasBgActivation,
   initializeBgTools,
 } from "./src/tool-activation.ts";
-import { offerCompletion } from "../context-output/src/completion.ts";
+import {
+  completeWithFallback,
+  offerCompletion,
+} from "../context-output/src/completion.ts";
 
 const WIDGET_KEY = "background-terminals";
 
@@ -123,12 +126,36 @@ export default function (pi: ExtensionAPI) {
     }
   };
 
-  const deliverResult = (snap: TerminalSnapshot) => {
+  const deliverResult = (snapshot: TerminalSnapshot) => {
+    const snap = {
+      ...snapshot,
+      stdout: { ...snapshot.stdout },
+      stderr: { ...snapshot.stderr },
+    };
+    const deliveryContext = sessionContext;
     try {
       const output = buildTerminalResultMessage(snap);
       const references = [snap.stdout.spillPath, snap.stderr.spillPath].filter(
         (value): value is string => value !== undefined,
       );
+      const sendDirect = () => {
+        if (!deliveryContext || sessionContext !== deliveryContext) return;
+        pi.sendMessage(
+          {
+            customType: "background-terminal-result",
+            content: output,
+            display: true,
+            details: {
+              id: snap.id,
+              title: snap.title,
+              status: snap.status,
+              exitCode: snap.exitCode,
+              signal: snap.signal,
+            },
+          },
+          { deliverAs: "followUp", triggerTurn: true },
+        );
+      };
       const delivery = offerCompletion(pi.events, {
         kind: "background-terminal",
         id: snap.id,
@@ -152,29 +179,12 @@ export default function (pi: ExtensionAPI) {
         },
         externalArtifactReferences: references,
       });
-      if (delivery) {
-        void delivery.then((outcome) => {
-          if (!outcome.delivered && sessionContext) resultDelivery.defer(snap);
-        });
-        return true;
-      }
-      pi.sendMessage(
-        {
-          customType: "background-terminal-result",
-          content: output,
-          display: true,
-          details: {
-            id: snap.id,
-            title: snap.title,
-            status: snap.status,
-            exitCode: snap.exitCode,
-            signal: snap.signal,
-          },
-        },
-        snap.status === "failed"
-          ? { deliverAs: "followUp", triggerTurn: true }
-          : { deliverAs: "nextTurn", triggerTurn: false },
-      );
+      void completeWithFallback(delivery, sendDirect).catch((error) => {
+        console.error("background-terminals: failed to deliver result", error);
+        if (deliveryContext && sessionContext === deliveryContext) {
+          resultDelivery.defer(snap);
+        }
+      });
       return true;
     } catch (error) {
       console.error("background-terminals: failed to deliver result", error);
@@ -215,6 +225,7 @@ export default function (pi: ExtensionAPI) {
   };
 
   pi.on("session_start", (_event, ctx) => {
+    if (sessionContext && sessionContext !== ctx) resultDelivery.clear();
     sessionContext = ctx;
     if (ctx.hasUI) ui = ctx.ui;
     initializeSessionToolActivation(ctx);

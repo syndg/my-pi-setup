@@ -2,7 +2,7 @@
 
 /** Describes subagent_spawn and the fixed concurrency cap. */
 export const SUBAGENT_SPAWN_TOOL_DESCRIPTION =
-  "Spawn a background subagent: a fully autonomous, headless Pi agent with its own context window and this environment's tools and config. Fire-and-forget: this returns immediately with an id. The subagent's final output is queued back to you as a message when it settles, or collect it explicitly with subagent_wait. Children cannot orchestrate more agents/workflows or ask the user, and cannot see this conversation, so the prompt must be self-contained. Only use trusted working directories. Max 4 subagents can be running at once.";
+  "Spawn a background subagent: a fully autonomous, headless Pi agent with its own context window and this environment's tools and config. Fire-and-forget: this returns immediately with an id, and the final output is delivered automatically when the child settles. Children cannot orchestrate more agents/workflows or ask the user, and cannot see this conversation, so the prompt must be self-contained. Only use trusted working directories. Max 4 subagents can be running at once.";
 
 /** Adds background subagent delegation to the parent model's available-tools prompt. */
 export const SUBAGENT_SPAWN_PROMPT_SNIPPET =
@@ -12,7 +12,7 @@ export const SUBAGENT_SPAWN_PROMPT_SNIPPET =
 export const SUBAGENT_SPAWN_PROMPT_GUIDELINES = [
   "Use subagent_spawn to delegate self-contained tasks that can run in the background; give it a complete, standalone prompt.",
   "Pi is the only available subagent harness.",
-  "After subagent_spawn, keep working; results arrive automatically. Only call subagent_wait when you cannot proceed without the result.",
+  "After subagent_spawn, keep working; results arrive automatically as waking follow-ups.",
   "At Yellow+ context pressure, prefer narrowly scoped delegation and choose the least-privilege research, coding, review, or minimal profile; delegation remains optional and is never automatic.",
 ];
 
@@ -42,14 +42,14 @@ export function buildSubagentSpawnResult(options: {
 }) {
   return (
     `Spawned subagent ${options.id} "${options.title}" (${options.harness}: ${options.modelLabel}, ${options.cwd}).\n` +
-    `It runs in the background. Its result will be delivered to you when it finishes, ` +
-    `or use subagent_wait(ids: ["${options.id}"]) to block for it, subagent_cancel to stop it, subagent_check to peek, subagent_list to see all.`
+    `It runs in the background and its result will be delivered automatically when it finishes. ` +
+    `Use subagent_cancel to stop it, subagent_check to peek, or subagent_list to see all.`
   );
 }
 
 /** Describes explicit blocking collection of one or more subagent results. */
 export const SUBAGENT_WAIT_TOOL_DESCRIPTION =
-  "Block until all listed subagents have settled, then return their final outputs. Prefer letting results arrive automatically; use this only when you need a result before continuing.";
+  "Explicit synchronization barrier: block until all listed subagents have settled, then return their final outputs. Use only when the current operation cannot continue until those results arrive.";
 
 /** Model-facing schema description for the subagent ids to await. */
 export const SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS = {

@@ -11,7 +11,15 @@ export type CompletionStatus = "success" | "failure" | "killed";
 
 export interface CompletionDeliveryOutcome {
   readonly claimed: true;
+  /** The adapter completed brokerage and synchronously handed off to Pi. */
+  readonly accepted: boolean;
+  /**
+   * Compatibility field for existing producers. With ExtensionAPI.sendMessage
+   * this means accepted for delivery, not asynchronously confirmed delivery.
+   */
   readonly delivered: boolean;
+  /** Always false at the current void ExtensionAPI.sendMessage boundary. */
+  readonly deliveryConfirmed: boolean;
   readonly wokeParent: boolean;
   readonly artifactUri?: string;
   readonly error?: string;
@@ -89,14 +97,29 @@ export function offerCompletion(
   return delivery;
 }
 
-export function shouldWakeParent(
-  request: Pick<CompletionBrokerRequest, "status" | "urgent" | "waited">,
+/** Run the producer's legacy delivery whenever brokerage is absent/rejected. */
+export async function completeWithFallback(
+  delivery: Promise<CompletionDeliveryOutcome> | null,
+  fallback: () => void,
 ) {
-  return (
-    request.status === "failure" ||
-    request.urgent === true ||
-    request.waited === true
-  );
+  if (!delivery) {
+    fallback();
+    return;
+  }
+  let accepted = false;
+  try {
+    accepted = (await delivery).accepted;
+  } catch {
+    // A rejected broker promise is the same as a rejected handoff.
+  }
+  if (!accepted) fallback();
+}
+
+export function shouldWakeParent(
+  _request: Pick<CompletionBrokerRequest, "status" | "urgent" | "waited">,
+) {
+  // Every unsolicited completion must make progress without another user turn.
+  return true;
 }
 
 export function boundedExternalReferences(

@@ -182,6 +182,7 @@ export function createContextOutputExtension(
     let governor: GovernorState | undefined;
     let sessionContext: ExtensionContext | undefined;
     let metricEntries = 0;
+    let sessionGeneration = 0;
 
     const pressure = (): PressureLevel | null =>
       governor?.sessionId === sessionId ? governor.pressure.level : null;
@@ -206,15 +207,19 @@ export function createContextOutputExtension(
     const deliverCompletion = async (
       event: CompletionBrokerEvent,
     ): Promise<CompletionDeliveryOutcome> => {
-      if (!broker)
+      const activeBroker = broker;
+      const activeGeneration = sessionGeneration;
+      if (!activeBroker)
         return {
           claimed: true,
           delivered: false,
+          accepted: false,
           wokeParent: false,
+          deliveryConfirmed: false,
           error: "no active session",
         };
       const result = await brokerText({
-        broker,
+        broker: activeBroker,
         toolName: event.toolName,
         outputClass: event.outputClass,
         pressure: pressure(),
@@ -223,6 +228,20 @@ export function createContextOutputExtension(
         metadata: { completionKind: event.kind, completionId: event.id },
         brokerConfig: config.broker,
       });
+      if (
+        activeGeneration !== sessionGeneration ||
+        activeBroker !== broker ||
+        !sessionContext
+      ) {
+        return {
+          claimed: true,
+          accepted: false,
+          delivered: false,
+          deliveryConfirmed: false,
+          wokeParent: false,
+          error: "completion session changed during brokerage",
+        };
+      }
       const references = boundedExternalReferences(
         event.externalArtifactReferences,
         config.completions.maximumExternalReferences,
@@ -250,7 +269,9 @@ export function createContextOutputExtension(
         );
         return {
           claimed: true,
+          accepted: true,
           delivered: true,
+          deliveryConfirmed: false,
           wokeParent: wake,
           ...(result.envelope?.artifact
             ? { artifactUri: result.envelope.artifact.reference.uri }
@@ -259,7 +280,9 @@ export function createContextOutputExtension(
       } catch (error) {
         return {
           claimed: true,
+          accepted: false,
           delivered: false,
+          deliveryConfirmed: false,
           wokeParent: false,
           error: error instanceof Error ? error.message : String(error),
         };
@@ -271,12 +294,23 @@ export function createContextOutputExtension(
       (value) => {
         if (!config.completions.enabled || !isCompletionBrokerEvent(value))
           return;
-        // Claim synchronously before any archive I/O.
-        value.accept(deliverCompletion(value));
+        // Claim synchronously before archive I/O. Brokerage failures resolve to
+        // a rejected handoff so producers can retain their fallback result.
+        value.accept(
+          deliverCompletion(value).catch((error) => ({
+            claimed: true,
+            accepted: false,
+            delivered: false,
+            deliveryConfirmed: false,
+            wokeParent: false,
+            error: error instanceof Error ? error.message : String(error),
+          })),
+        );
       },
     );
 
     pi.on("session_start", (_event, ctx) => {
+      sessionGeneration += 1;
       config =
         options.config ?? loadContextOutputConfig(contextOutputPaths().config);
       sessionId = ctx.sessionManager.getSessionId();
@@ -324,6 +358,7 @@ export function createContextOutputExtension(
     });
 
     pi.on("session_shutdown", () => {
+      sessionGeneration += 1;
       archive = undefined;
       broker = undefined;
       errorBroker = undefined;
