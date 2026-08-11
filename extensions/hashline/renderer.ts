@@ -344,9 +344,14 @@ export class HashlineEditComponent implements Component {
     const path = theme.fg("accent", `${this.#path || "…"}${location}`);
     const title = `${styledIcon} ${theme.fg("toolTitle", "edit")} ${path}${stats}`;
 
+    const backgroundAnsi = theme.getBgAnsi(background);
     const paint = (line: string) => {
       const padded = line + " ".repeat(Math.max(0, width - visibleWidth(line)));
-      return theme.bg(background, truncateToWidth(padded, width, ""));
+      const fitted = truncateToWidth(padded, width, "");
+      const stabilized = fitted
+        .replace(/\x1b\[(?:0)?m/g, (reset) => `${reset}${backgroundAnsi}`)
+        .replace(/\x1b\[49m/g, (reset) => `${reset}${backgroundAnsi}`);
+      return `${backgroundAnsi}${stabilized}\x1b[49m`;
     };
     const border = (text: string) => theme.fg(borderColor, text);
     const bottom = border(`╰${"─".repeat(Math.max(0, width - 2))}╯`);

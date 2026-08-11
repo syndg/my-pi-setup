@@ -69,6 +69,33 @@ const theme = new Theme(
 const plain = (lines: string[]) =>
   lines.join("\n").replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "");
 
+const visibleBackgroundStates = (line: string, backgroundAnsi: string) => {
+  const cells: Array<{ char: string; backgroundActive: boolean }> = [];
+  const sgr = /\x1b\[[0-9;]*m/g;
+  let backgroundActive = false;
+  let offset = 0;
+  const record = (text: string) => {
+    for (const char of text) {
+      if (visibleWidth(char) > 0) cells.push({ char, backgroundActive });
+    }
+  };
+
+  for (const match of line.matchAll(sgr)) {
+    record(line.slice(offset, match.index));
+    const sequence = match[0];
+    if (sequence === backgroundAnsi) {
+      backgroundActive = true;
+    } else {
+      const parameters = sequence.slice(2, -1);
+      const codes = parameters === "" ? [0] : parameters.split(";").map(Number);
+      if (codes.includes(0) || codes.includes(49)) backgroundActive = false;
+    }
+    offset = match.index + sequence.length;
+  }
+  record(line.slice(offset));
+  return cells;
+};
+
 const settle = () => new Promise((resolve) => setTimeout(resolve, 60));
 
 test("partial-argument cadence previews only complete structured operations and hides protocol", async () => {
@@ -505,6 +532,34 @@ test("body borders align at the card edge for short and truncated lines", () => 
   }
   assert.match(body[1] ?? "", /… │$/);
   assert.ok(lines.every((line) => visibleWidth(line) === width));
+});
+
+test("truncated ANSI body rows retain their background through the right border", () => {
+  const width = 28;
+  const component = new HashlineEditComponent(theme);
+  component.updateArgs({ path: "background.ts" }, false);
+  component.settleSuccess(
+    {
+      diff: `+1 ${"long styled content ".repeat(8)}`,
+      patch: "patch",
+      firstChangedLine: 1,
+    },
+    false,
+    theme,
+  );
+
+  const line = component.render(width)[1] ?? "";
+  const cells = visibleBackgroundStates(line, theme.getBgAnsi("toolSuccessBg"));
+  const ellipsisIndex = cells.findIndex(({ char }) => char === "…");
+
+  assert.equal(cells.length, width);
+  assert.ok(ellipsisIndex >= 0, "the body row should be truncated");
+  assert.equal(cells[ellipsisIndex]?.backgroundActive, true);
+  assert.equal(cells[ellipsisIndex + 1]?.char, " ");
+  assert.equal(cells[ellipsisIndex + 1]?.backgroundActive, true);
+  assert.equal(cells.at(-1)?.char, "│");
+  assert.equal(cells.at(-1)?.backgroundActive, true);
+  assert.ok(cells.every(({ backgroundActive }) => backgroundActive));
 });
 
 test("success frame uses a muted, continuous border around a separately styled header", () => {
