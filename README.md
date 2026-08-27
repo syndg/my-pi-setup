@@ -1,5 +1,7 @@
 # my pi setup
 
+Tested with Pi 0.84.1. Requires Node.js 20.18.1 or newer.
+
 This setup is fairly opinionated, it:
 
 - sets up github dark default as the theme
@@ -11,6 +13,7 @@ This setup is fairly opinionated, it:
 - adds an ask user tool, which lets the model ask multiple choice questions
 - adds first-class `fd` (file discovery) and `rg` (content search) tools
 - replaces Pi's paired `read`/`edit` tools with a strict snapshot-tagged Hashline adaptation
+- adds sandboxed MCP Code Mode: one model-facing `execute` tool with host-only discovery, permissions, OAuth, and `/mcp` management
 
 ![Pi setup interface](assets/pi-setup.jpeg)
 

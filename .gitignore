@@ -13,6 +13,10 @@ trust.json
 models-store.json
 extensions/summaries/config.private.json
 extensions/summaries/config.private.json.*.tmp
+code-mode-catalog.json
+code-mode-catalog.json.*.tmp
+/code-mode/
+/mcp-oauth/
 
 # Environment variables and secrets
 .env

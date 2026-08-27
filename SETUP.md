@@ -1,5 +1,9 @@
 # Setup
 
+## Requirements
+
+This setup is tested with Pi 0.84.1 and requires Node.js 20.18.1 or newer.
+
 Keep this repository in a normal Git checkout, preferably on internal storage, and install it as a local Pi package:
 
 ```sh
@@ -14,6 +18,48 @@ pi config
 The local package points directly at this checkout; Pi does not copy it. Use `pi config` for global per-extension controls (`pi config -l` for project overrides), and use `/reload` after source or configuration changes. Do not also copy these extensions into `~/.pi/agent/extensions`, because duplicate entrypoints would load twice.
 
 The Hashline extension keeps its runtime diff dependency in its own package, so the second install command is required. `--omit=peer` is mandatory: Hashline must use the host's Pi packages so its mutation queue is shared with built-in tools.
+
+## MCP Code Mode
+
+Code Mode is discovered from `extensions/code-mode/index.ts` and uses the root
+dependencies installed above. It must be the only MCP host: remove or disable
+`pi-mcp-adapter` before loading Code Mode. To keep Context7 schemas out of the
+provider's eager tool list, also disable the separate `@upstash/context7-pi`
+extension when using Context7 through Code Mode.
+
+Install the included personal Context7 configuration:
+
+```sh
+cp ~/Coding/my-pi-setup/extensions/code-mode/code-mode.example.json ~/.pi/agent/code-mode.json
+```
+
+Set `CONTEXT7_API_KEY` in the process environment or in
+`~/.pi/agent/.env`. Code Mode resolves `${CONTEXT7_API_KEY}` host-side and does
+not place the value in its guest, catalog, trace, or transcript. Then restart
+Pi and run `/mcp list` followed by `/mcp test context7`.
+
+In a noninteractive print/JSON session, add a server with the complete syntax:
+
+```text
+/mcp add <global|project> <name> <stdio|http> <command-or-url> [args...]
+```
+
+OAuth secrets prefer the OS credential store. If a keyring operation fails,
+Code Mode automatically and silently uses the locked-file fallback at
+`~/.pi/agent/code-mode/oauth-fallback/`; it does not display a notification or
+automatic fallback report.
+
+The live opt-in end-to-end check is:
+
+```sh
+cd ~/Coding/my-pi-setup
+PI_CODE_MODE_CONTEXT7_E2E=1 npm --prefix extensions/code-mode test
+```
+
+It searches, describes, and invokes both Context7 MCP tools and checks that the
+credential is absent from the result. See
+[`extensions/code-mode/README.md`](extensions/code-mode/README.md) for server
+configuration, permissions, OAuth, limits, and troubleshooting.
 
 ### Hashline rollback
 
