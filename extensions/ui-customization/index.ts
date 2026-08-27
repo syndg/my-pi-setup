@@ -26,6 +26,12 @@ import {
   isGovernorState,
 } from "../shared/context-governor-state.ts";
 import { formatContextFooter } from "./src/context-footer.ts";
+import {
+  fetchCodexWeeklyUsage,
+  formatCodexWeeklyUsage,
+  parseCodexWeeklyUsageHeaders,
+  type CodexWeeklyUsage,
+} from "./src/codex-usage.ts";
 
 type Rgb = [number, number, number];
 interface RenderableNode {
@@ -192,6 +198,36 @@ export default function uiCustomization(pi: ExtensionAPI) {
   let requestRender: (() => void) | undefined;
   let activeTui: DashboardTui | undefined;
   let themeRemovalTimers: Array<ReturnType<typeof setTimeout>> = [];
+  let currentProvider: string | undefined;
+  let codexWeeklyUsage: CodexWeeklyUsage | undefined;
+  let codexUsageTimer: ReturnType<typeof setInterval> | undefined;
+  let sessionActive = false;
+  let usageRefresh: Promise<void> | undefined;
+
+  function refreshCodexUsage(ctx: ExtensionContext) {
+    if (currentProvider !== "openai-codex") return Promise.resolve();
+    if (usageRefresh) return usageRefresh;
+
+    usageRefresh = (async () => {
+      try {
+        const auth = await ctx.modelRegistry.getProviderAuth("openai-codex");
+        const accessToken = auth?.auth.apiKey;
+        if (!accessToken) return;
+        const usage = await fetchCodexWeeklyUsage(accessToken, {
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!sessionActive || !usage) return;
+        codexWeeklyUsage = usage;
+        requestRender?.();
+      } catch {
+        // Usage is supplementary UI; keep the last snapshot on network errors.
+      } finally {
+        usageRefresh = undefined;
+      }
+    })();
+
+    return usageRefresh;
+  }
 
   const stopModelListener = pi.events.on(MODEL_INFO_CHANNEL, (value) => {
     if (!isModelInfoState(value)) return;
@@ -285,6 +321,18 @@ export default function uiCustomization(pi: ExtensionAPI) {
           ];
 
           const contextSegments = formatContextFooter(governorState, width);
+          const codexLabel =
+            currentProvider === "openai-codex" && codexWeeklyUsage
+              ? formatCodexWeeklyUsage(codexWeeklyUsage)
+              : "";
+          const themedCodexLabel = codexLabel
+            ? codexWeeklyUsage!.remainingPercent <= 10
+              ? theme.fg("error", codexLabel)
+              : codexWeeklyUsage!.remainingPercent <= 25
+                ? theme.fg("warning", codexLabel)
+                : theme.fg("success", codexLabel)
+            : "";
+
           if (contextSegments.length > 0) {
             const contextLine = contextSegments
               .map((segment) => {
@@ -303,7 +351,9 @@ export default function uiCustomization(pi: ExtensionAPI) {
                 }
               })
               .join("");
-            lines.push(contextLine);
+            lines.push(columns(contextLine, themedCodexLabel, width));
+          } else if (themedCodexLabel) {
+            lines.push(columns("", themedCodexLabel, width));
           }
 
           // Extension statuses render after the dashboard lines, one per row.
@@ -332,13 +382,41 @@ export default function uiCustomization(pi: ExtensionAPI) {
     gitInfo = emptyGitInfoState();
     governorState = emptyGovernorState();
     install(ctx);
+    currentProvider = ctx.model?.provider;
+    sessionActive = true;
+    if (codexUsageTimer) clearInterval(codexUsageTimer);
+    codexUsageTimer = setInterval(() => {
+      void refreshCodexUsage(ctx);
+    }, 5 * 60_000);
+    codexUsageTimer.unref?.();
+    void refreshCodexUsage(ctx);
   });
 
   pi.on("resources_discover", () => {
     if (activeTui) scheduleThemeRemoval(activeTui);
   });
 
+  pi.on("model_select", (event, ctx) => {
+    currentProvider = event.model.provider;
+    requestRender?.();
+    void refreshCodexUsage(ctx);
+  });
+
+  pi.on("after_provider_response", (event, ctx) => {
+    if (ctx.model?.provider !== "openai-codex") return;
+    const usage = parseCodexWeeklyUsageHeaders(event.headers);
+    if (!usage) return;
+    currentProvider = "openai-codex";
+    codexWeeklyUsage = usage;
+    requestRender?.();
+  });
+
   pi.on("session_shutdown", (_event, ctx) => {
+    sessionActive = false;
+    currentProvider = undefined;
+    codexWeeklyUsage = undefined;
+    if (codexUsageTimer) clearInterval(codexUsageTimer);
+    codexUsageTimer = undefined;
     stopModelListener();
     stopGitListener();
     stopGovernorListener();
